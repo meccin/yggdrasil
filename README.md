@@ -39,6 +39,10 @@ ygg repo set <name> [opts]           # edit fields on an existing repo
     --claude-dir PATH|none           # `none` clears (back to ~/.claude default)
     --permission-mode MODE|none
     --default-mode mr|review|dry|none
+    --allow-tool TOOL                # repeatable; replaces repo allowlist
+    --disallow-tool TOOL             # repeatable; replaces repo denylist
+    --settings PATH|none             # path to a Claude Code settings JSON
+    --reset-tools                    # clear repo allow/deny → inherit global
 ygg repo list
 ygg repo rm <name>
 ygg metrics [opts]                   # show usage metrics
@@ -71,6 +75,9 @@ restart `ygg`. Shape:
   "maxConcurrent": 3,                    // 1..10
   "pollIntervalSec": 300,                // >= 60
   "defaultMode": "review",               // mr | review | dry
+  "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+  "disallowedTools": [],
+  "settingsPath": null,                  // global claude --settings path
   "repos": [
     {
       "name": "owner/project",
@@ -81,7 +88,10 @@ restart `ygg`. Shape:
       "autoSpawnLabel": "agent-ready",
       "permissionMode": null,            // null = inherit global
       "defaultMode": null,               // null = inherit global
-      "claudeConfigDir": null            // null = ~/.claude
+      "claudeConfigDir": null,           // null = ~/.claude
+      "allowedTools": null,              // null = inherit global; array overrides
+      "disallowedTools": null,
+      "settingsPath": null
     }
   ]
 }
@@ -155,6 +165,101 @@ default | dontAsk | plan`.
 
 Worktree isolation keeps the blast radius of `bypassPermissions` contained to a
 single branch.
+
+## Tool permissions
+
+`permission-mode` controls **how approval gates behave** for headless spawns,
+but it does not gate **which tools** an agent may invoke. v0.6 introduces an
+allowlist + denylist that pipe straight into `claude --allowed-tools` and
+`claude --disallowed-tools`. Both compose with the permission mode — even
+under `bypassPermissions`, anything outside the allowlist is refused, and
+anything in the denylist is refused unconditionally.
+
+### Defaults
+
+Out of the box the global allowlist is:
+
+```
+Read, Write, Edit, Glob, Grep, Bash
+```
+
+Covers the standard coding-agent flow (read context, edit code, run
+`git`/`bun`/`npm` via Bash). `WebFetch`, `Task` (subagent delegation),
+`NotebookEdit`, and others are **not** allowed by default — opt in per repo if
+your workflow needs them.
+
+### Per-repo overrides
+
+```bash
+# Tighten: only allow reads + edits, no Bash.
+ygg repo set owner/proj \
+  --allow-tool Read \
+  --allow-tool Edit \
+  --allow-tool Write
+
+# Add a denylist on top of the inherited allowlist:
+ygg repo set owner/proj \
+  --disallow-tool 'Bash(rm *)' \
+  --disallow-tool 'Bash(git push --force *)'
+
+# Clear all per-repo tool overrides → inherit global:
+ygg repo set owner/proj --reset-tools
+```
+
+`--allow-tool` and `--disallow-tool` are repeatable. Each invocation
+**replaces** the previous per-repo list (it is not additive). Reads of `ygg
+repo list` show `(global)` next to fields that fall back to inheritance.
+
+### Pattern syntax
+
+Tool names alone admit every invocation. Patterns can scope further:
+
+| Example                              | Meaning                                |
+|--------------------------------------|----------------------------------------|
+| `Bash(git *)`                        | only `git` shell commands              |
+| `Bash(bun run *)`                    | only `bun run` invocations             |
+| `Edit(/src/**)`                      | only edits under `src/`                |
+| `WebFetch(domain:gitlab.example.com)`| only fetches from that domain          |
+
+Pattern matching follows the
+[Claude Code permissions](https://code.claude.com/docs/en/permissions.md)
+syntax.
+
+### `--settings` for richer policy
+
+For policies that don't fit a flat allow/deny list (workspace-scoped paths,
+domain rules, hook integration), point a repo at a Claude Code settings JSON:
+
+```bash
+ygg repo set owner/proj --settings ~/.claude/yggdrasil-strict.json
+```
+
+The file is forwarded verbatim via `claude --settings <path>` and accepts the
+same shape as `~/.claude/settings.json` (notably the `permissions` block with
+`allow`, `deny`, and `ask` keys). `ygg doctor` validates that the file exists
+and parses as JSON. Clear it back to inheriting the global default with
+`--settings none`.
+
+### Recommended hardening for headless
+
+```bash
+ygg repo set owner/proj \
+  --permission-mode dontAsk \
+  --allow-tool Read \
+  --allow-tool Write \
+  --allow-tool Edit \
+  --allow-tool Glob \
+  --allow-tool Grep \
+  --allow-tool 'Bash(git *)' \
+  --allow-tool 'Bash(bun *)' \
+  --disallow-tool 'Bash(rm -rf *)' \
+  --disallow-tool 'Bash(git push --force *)'
+```
+
+`dontAsk` auto-denies everything outside the allowlist without prompting (vs.
+`bypassPermissions`, which strips gates entirely). The combination keeps
+spawns fully headless while bounding the blast radius beyond just the
+worktree.
 
 ## Auto-spawn
 

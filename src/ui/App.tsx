@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput } from "ink";
 import { Header } from "./Header";
 import { RepoBar } from "./RepoBar";
@@ -36,17 +36,12 @@ export const App: React.FC = () => {
   const [logTopIdx, setLogTopIdx] = useState<number | null>(null);
   const [logFilter, setLogFilter] = useState<LogFilter>("all");
 
-  // Clear the screen ONLY on view transitions (main ⇄ fullLog ⇄ helpOpen), not
-  // on mount: the mount-time clear desyncs Ink's log-update anchor and causes
-  // every later re-render to stack below the original paint.
-  const skipMountClear = useRef(true);
-  useEffect(() => {
-    if (skipMountClear.current) {
-      skipMountClear.current = false;
-      return;
-    }
-    process.stdout.write("\x1b[2J\x1b[H");
-  }, [fullLog, helpOpen]);
+  // No manual screen clears on view transitions: useEffect fires AFTER Ink
+  // commits a frame, so writing escape codes here would erase the freshly
+  // painted view (help / fullscreen log) and nothing would repaint until
+  // another state change. Alt-screen + the dynamic pane heights (v0.5.1)
+  // keep content within the terminal, so Ink's own diffing handles redraws
+  // correctly without our help.
 
   // Reset log scroll back to tail-follow whenever the focused agent changes
   // so the user is never staring at a frozen window for the wrong run.

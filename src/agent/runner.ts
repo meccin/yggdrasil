@@ -10,6 +10,12 @@ interface SpawnOpts {
   prompt: string;
   permissionMode: PermissionMode;
   claudeConfigDir?: string | null;
+  // Tool gating forwarded to `claude --allowed-tools` / `--disallowed-tools`.
+  // Empty arrays skip the flag entirely (let Claude apply its own defaults).
+  allowedTools?: string[];
+  disallowedTools?: string[];
+  // Path to a Claude Code settings JSON forwarded via `--settings`.
+  settingsPath?: string | null;
   onExit: (code: number) => void;
 }
 
@@ -144,7 +150,16 @@ const parseStreamEvent = (raw: any, agent: Agent): void => {
 };
 
 export const spawnAgent = (opts: SpawnOpts): void => {
-  const { agent, prompt, permissionMode, claudeConfigDir, onExit } = opts;
+  const {
+    agent,
+    prompt,
+    permissionMode,
+    claudeConfigDir,
+    allowedTools,
+    disallowedTools,
+    settingsPath,
+    onExit,
+  } = opts;
   const args = [
     "-p",
     prompt,
@@ -154,6 +169,15 @@ export const spawnAgent = (opts: SpawnOpts): void => {
     "--permission-mode",
     permissionMode,
   ];
+  if (allowedTools && allowedTools.length > 0) {
+    args.push("--allowed-tools", allowedTools.join(" "));
+  }
+  if (disallowedTools && disallowedTools.length > 0) {
+    args.push("--disallowed-tools", disallowedTools.join(" "));
+  }
+  if (settingsPath) {
+    args.push("--settings", settingsPath);
+  }
 
   const env: Record<string, string> = { ...process.env, CI: "1" } as Record<string, string>;
   if (claudeConfigDir) env.CLAUDE_CONFIG_DIR = claudeConfigDir;

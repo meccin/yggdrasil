@@ -7,6 +7,9 @@ const baseGlobal: GlobalConfig = {
   maxConcurrent: 3,
   pollIntervalSec: 300,
   defaultMode: "review",
+  allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
+  disallowedTools: [],
+  settingsPath: null,
   repos: [],
 };
 
@@ -20,6 +23,9 @@ const baseRepo: RepoConfig = {
   permissionMode: null,
   defaultMode: null,
   claudeConfigDir: null,
+  allowedTools: null,
+  disallowedTools: null,
+  settingsPath: null,
 };
 
 describe("resolvePermissionMode", () => {

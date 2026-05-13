@@ -1,4 +1,4 @@
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { loadConfig, saveConfig, upsertRepo, removeRepo } from "./config";
@@ -7,7 +7,7 @@ import { ensureUserDirs, userDir, configFile } from "./paths";
 import { aggregate, formatReport, readMetrics } from "./metrics";
 import type { Provider, RepoConfig } from "./types";
 
-const VERSION = "0.5.1";
+const VERSION = "0.6.0";
 
 const printHelp = (): void => {
   console.log(`Yggdrasil ${VERSION} — TUI multi-agent dashboard
@@ -24,6 +24,10 @@ Usage:
                                        --label NAME
                                        --permission-mode MODE|none
                                        --default-mode mr|review|dry|none
+                                       --allow-tool TOOL        (repeatable; replaces allowlist)
+                                       --disallow-tool TOOL     (repeatable; replaces denylist)
+                                       --settings PATH|none     (claude settings JSON)
+                                       --reset-tools            (clear repo override → inherit global)
   ygg repo rm <name>                 remove repo by name
   ygg metrics [opts]                 show usage metrics
                                        --repo NAME
@@ -82,6 +86,27 @@ const cmdDoctor = (): number => {
     const exists = existsSync(r.path);
     check(`  repo ${r.name} [${r.provider}] (${r.path})`, exists, "path does not exist");
   }
+
+  // Validate any `settingsPath` reference (global + per-repo).
+  const settingsPaths: Array<{ source: string; path: string }> = [];
+  if (cfg.settingsPath) settingsPaths.push({ source: "global", path: cfg.settingsPath });
+  for (const r of cfg.repos) {
+    if (r.settingsPath) settingsPaths.push({ source: r.name, path: r.settingsPath });
+  }
+  for (const s of settingsPaths) {
+    if (!existsSync(s.path)) {
+      check(`settings (${s.source}): ${s.path}`, false, "file does not exist");
+      continue;
+    }
+    let parses = true;
+    try {
+      JSON.parse(readFileSync(s.path, "utf8"));
+    } catch {
+      parses = false;
+    }
+    check(`settings (${s.source}): ${s.path}`, parses, "file is not valid JSON");
+  }
+
   return ok ? 0 : 1;
 };
 
@@ -155,6 +180,9 @@ const cmdRepoAdd = (rawArgs: string[]): number => {
     permissionMode: existing?.permissionMode ?? null,
     defaultMode: existing?.defaultMode ?? null,
     claudeConfigDir: claudeDirArg ? claudeConfigDir : existing?.claudeConfigDir ?? null,
+    allowedTools: existing?.allowedTools ?? null,
+    disallowedTools: existing?.disallowedTools ?? null,
+    settingsPath: existing?.settingsPath ?? null,
   };
   saveConfig(upsertRepo(cfg, repo));
   const claudeNote = repo.claudeConfigDir ? ` · claude:${repo.claudeConfigDir}` : "";
@@ -169,6 +197,12 @@ const cmdRepoList = (): number => {
     return 0;
   }
   for (const r of cfg.repos) {
+    const allowSrc = r.allowedTools === null ? " (global)" : "";
+    const denySrc = r.disallowedTools === null ? " (global)" : "";
+    const settingsSrc = r.settingsPath === null ? " (global)" : "";
+    const allowList = (r.allowedTools ?? cfg.allowedTools).join(", ") || "(none)";
+    const denyList = (r.disallowedTools ?? cfg.disallowedTools).join(", ") || "(none)";
+    const settingsVal = (r.settingsPath ?? cfg.settingsPath) || "(none)";
     console.log(`- ${r.name}`);
     console.log(`    path:     ${r.path}`);
     console.log(`    provider: ${r.provider}`);
@@ -177,6 +211,9 @@ const cmdRepoList = (): number => {
     console.log(`    perm:     ${r.permissionMode || "(global)"}`);
     console.log(`    mode:     ${r.defaultMode || "(global)"}`);
     console.log(`    claude:   ${r.claudeConfigDir || "(default ~/.claude)"}`);
+    console.log(`    allow:    ${allowList}${allowSrc}`);
+    console.log(`    deny:     ${denyList}${denySrc}`);
+    console.log(`    settings: ${settingsVal}${settingsSrc}`);
   }
   return 0;
 };
@@ -191,6 +228,26 @@ const cmdRepoSet = (rawArgs: string[]): number => {
       return v;
     }
     return undefined;
+  };
+  // Repeatable string flag — pulls out every occurrence in declaration order.
+  // Used for `--allow-tool` / `--disallow-tool` where the full list replaces
+  // the previous repo override.
+  const popAll = (flag: string): string[] => {
+    const out: string[] = [];
+    while (true) {
+      const idx = args.indexOf(flag);
+      if (idx < 0) break;
+      const v = args[idx + 1];
+      args.splice(idx, 2);
+      if (v !== undefined) out.push(v);
+    }
+    return out;
+  };
+  const popBool = (flag: string): boolean => {
+    const idx = args.indexOf(flag);
+    if (idx < 0) return false;
+    args.splice(idx, 1);
+    return true;
   };
   const name = args.shift();
   if (!name) {
@@ -237,6 +294,30 @@ const cmdRepoSet = (rawArgs: string[]): number => {
     } else {
       console.error(`invalid --default-mode: ${modeArg}`);
       return 1;
+    }
+  }
+
+  const allowTools = popAll("--allow-tool");
+  const disallowTools = popAll("--disallow-tool");
+  const resetTools = popBool("--reset-tools");
+  if (resetTools) {
+    next.allowedTools = null;
+    next.disallowedTools = null;
+  }
+  if (allowTools.length > 0) next.allowedTools = allowTools;
+  if (disallowTools.length > 0) next.disallowedTools = disallowTools;
+
+  const settingsArg = pop("--settings");
+  if (settingsArg !== undefined) {
+    if (settingsArg === "none" || settingsArg === "") {
+      next.settingsPath = null;
+    } else {
+      const resolved = resolve(settingsArg);
+      if (!existsSync(resolved)) {
+        console.error(`--settings path does not exist: ${resolved}`);
+        return 1;
+      }
+      next.settingsPath = resolved;
     }
   }
 

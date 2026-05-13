@@ -2,7 +2,12 @@ import { randomUUID } from "node:crypto";
 import type { Agent, FinalizeMode, RepoConfig } from "../types";
 import type { Issue } from "../sources/types";
 import { store } from "../store";
-import { resolvePermissionMode } from "../config";
+import {
+  resolveAllowedTools,
+  resolveDisallowedTools,
+  resolvePermissionMode,
+  resolveSettingsPath,
+} from "../config";
 import { addWorktree, removeWorktree } from "./worktree";
 import { buildPrompt, killAgent, spawnAgent } from "./runner";
 import { finalize } from "./finalize";
@@ -65,12 +70,18 @@ export const spawnAgentForIssue = async (
 
   const prompt = buildPrompt(issue.title, issue.description || "", issue.iid);
   const permissionMode = resolvePermissionMode(state.config, repo);
+  const allowedTools = resolveAllowedTools(state.config, repo);
+  const disallowedTools = resolveDisallowedTools(state.config, repo);
+  const settingsPath = resolveSettingsPath(state.config, repo);
 
   spawnAgent({
     agent,
     prompt,
     permissionMode,
     claudeConfigDir: repo.claudeConfigDir,
+    allowedTools,
+    disallowedTools,
+    settingsPath,
     onExit: async (code) => {
       const cur = store.getState().agents[id];
       if (!cur) return;

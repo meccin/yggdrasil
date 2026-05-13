@@ -4,11 +4,20 @@ import type { GlobalConfig, RepoConfig, PermissionMode, FinalizeMode } from "./t
 import type { Provider } from "./sources/types";
 import { detectRemote } from "./sources";
 
+// Default tools a fresh-installed Yggdrasil will allow on every spawn unless
+// the repo overrides it. Picked to cover the typical coding-agent flow
+// (read/write/search/Bash for git+lint+test) without admitting WebFetch, Task
+// delegation, or other higher-impact tools by default.
+export const DEFAULT_ALLOWED_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep", "Bash"];
+
 const DEFAULT_CONFIG: GlobalConfig = {
   permissionMode: "acceptEdits",
   maxConcurrent: 3,
   pollIntervalSec: 300,
   defaultMode: "review",
+  allowedTools: [...DEFAULT_ALLOWED_TOOLS],
+  disallowedTools: [],
+  settingsPath: null,
   repos: [],
 };
 
@@ -59,6 +68,13 @@ const validateConfig = (raw: any): GlobalConfig => {
   if (!Array.isArray(cfg.repos)) cfg.repos = [];
   cfg.pollIntervalSec = Math.max(60, Number(cfg.pollIntervalSec) || 300);
   cfg.maxConcurrent = Math.max(1, Math.min(10, Number(cfg.maxConcurrent) || 3));
+  cfg.allowedTools = Array.isArray(cfg.allowedTools)
+    ? cfg.allowedTools.map(String)
+    : [...DEFAULT_ALLOWED_TOOLS];
+  cfg.disallowedTools = Array.isArray(cfg.disallowedTools)
+    ? cfg.disallowedTools.map(String)
+    : [];
+  cfg.settingsPath = cfg.settingsPath ? String(cfg.settingsPath) : null;
   cfg.repos = cfg.repos.map(normalizeRepo);
   return cfg;
 };
@@ -79,6 +95,9 @@ const normalizeRepo = (r: any): RepoConfig => {
     permissionMode: r.permissionMode || null,
     defaultMode: r.defaultMode || null,
     claudeConfigDir: r.claudeConfigDir ? String(r.claudeConfigDir) : null,
+    allowedTools: Array.isArray(r.allowedTools) ? r.allowedTools.map(String) : null,
+    disallowedTools: Array.isArray(r.disallowedTools) ? r.disallowedTools.map(String) : null,
+    settingsPath: r.settingsPath ? String(r.settingsPath) : null,
   };
 };
 
@@ -91,6 +110,21 @@ export const resolveMode = (
   cfg: GlobalConfig,
   repo: RepoConfig,
 ): FinalizeMode => repo.defaultMode || cfg.defaultMode;
+
+export const resolveAllowedTools = (
+  cfg: GlobalConfig,
+  repo: RepoConfig,
+): string[] => repo.allowedTools ?? cfg.allowedTools;
+
+export const resolveDisallowedTools = (
+  cfg: GlobalConfig,
+  repo: RepoConfig,
+): string[] => repo.disallowedTools ?? cfg.disallowedTools;
+
+export const resolveSettingsPath = (
+  cfg: GlobalConfig,
+  repo: RepoConfig,
+): string | null => repo.settingsPath ?? cfg.settingsPath;
 
 export const upsertRepo = (cfg: GlobalConfig, repo: RepoConfig): GlobalConfig => {
   const idx = cfg.repos.findIndex((r) => r.name === repo.name);

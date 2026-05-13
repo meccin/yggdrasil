@@ -80,7 +80,7 @@ export const HelpModal: React.FC = () => (
     <Section title="Session" rows={SESSION} />
 
     <Box flexDirection="column" marginBottom={1}>
-      <Text bold color="cyan">Finalize modes (chosen at spawn time)</Text>
+      <Text bold color="cyan">Finalize modes (at spawn time)</Text>
       {MODES.map((m) => (
         <Box key={m.key}>
           <Box width={10}><Text color="yellow">{m.key}</Text></Box>
@@ -91,9 +91,14 @@ export const HelpModal: React.FC = () => (
 
     <Box flexDirection="column" marginBottom={1}>
       <Text bold color="cyan">autoSpawn</Text>
-      <Text>Toggle with <Text color="yellow">a</Text>. Poller spawns on issues labeled <Text color="yellow">agent-ready</Text>.</Text>
+      <Text>
+        Toggle with <Text color="yellow">a</Text>. Poller spawns on issues
+        labeled <Text color="yellow">agent-ready</Text>.
+      </Text>
       <Text>Force a poll now with <Text color="yellow">p</Text>.</Text>
-      <Text dimColor>Current label shows in top bar as <Text color="green">[auto:LABEL]</Text>. See README to change.</Text>
+      <Text dimColor>
+        Current label shows in top bar as <Text color="green">[auto:LABEL]</Text>.
+      </Text>
     </Box>
 
     <Box flexDirection="column" marginBottom={1}>

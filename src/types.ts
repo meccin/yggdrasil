@@ -24,6 +24,14 @@ export interface RepoConfig {
   // Optional path to a Claude Code config dir (CLAUDE_CONFIG_DIR). Lets you
   // run agents under different Claude accounts per repo. null = ~/.claude default.
   claudeConfigDir: string | null;
+  // Tool gating (claude `--allowed-tools` / `--disallowed-tools`). null on the
+  // repo means "inherit the global default"; an array (even empty) means full
+  // override. See DEFAULT_ALLOWED_TOOLS in config.ts.
+  allowedTools: string[] | null;
+  disallowedTools: string[] | null;
+  // Path to a Claude Code settings JSON forwarded via `--settings`. Same shape
+  // as ~/.claude/settings.json (permissions.allow/deny/ask blocks supported).
+  settingsPath: string | null;
 }
 
 export interface GlobalConfig {
@@ -31,6 +39,9 @@ export interface GlobalConfig {
   maxConcurrent: number;
   pollIntervalSec: number;
   defaultMode: FinalizeMode;
+  allowedTools: string[];
+  disallowedTools: string[];
+  settingsPath: string | null;
   repos: RepoConfig[];
 }
 
