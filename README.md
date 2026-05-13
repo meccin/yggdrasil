@@ -45,6 +45,12 @@ ygg repo set <name> [opts]           # edit fields on an existing repo
     --reset-tools                    # clear repo allow/deny → inherit global
 ygg repo list
 ygg repo rm <name>
+ygg config show                      # print global defaults
+ygg config set [opts]                # edit global defaults
+    --poll-interval N                # seconds (>= 60)
+    --max-concurrent N               # 1..10
+    --permission-mode MODE
+    --default-mode mr|review|dry
 ygg metrics [opts]                   # show usage metrics
     --repo NAME
     --since YYYY-MM-DD
@@ -261,6 +267,41 @@ ygg repo set owner/proj \
 spawns fully headless while bounding the blast radius beyond just the
 worktree.
 
+## Global config
+
+Everything in `~/.yggdrasil/config.json` outside the `repos` array is global
+defaults (`permissionMode`, `defaultMode`, `maxConcurrent`, `pollIntervalSec`,
+plus the v0.6 `allowedTools`/`disallowedTools`/`settingsPath`). Edit those
+without opening the file:
+
+```bash
+ygg config show
+ygg config set --poll-interval 60 --max-concurrent 5
+```
+
+`ygg config set` validates each flag (poll interval `>= 60`, concurrency
+`1..10`, etc.) before writing. Per-repo overrides keep flowing through
+`ygg repo set` / `ygg repo list`.
+
+## Re-spawning failed agents
+
+When `claude -p` exits non-zero (network blip, transient gate, etc.) the
+agent moves to `failed`. Press `R` on the focused agent to re-spawn it
+in-place:
+
+- Same `agent.id`, so the card and log history stay.
+- Worktree + branch are reused when still valid on disk (commits the agent
+  already made are preserved); rebuilt against `origin/<base>` if the path
+  has been removed externally.
+- Issue title/description are refetched from GitLab/GitHub so edits on the
+  remote side reach the new run.
+- A `system: respawn` line is appended to the log so the history of attempts
+  is auditable. A fresh `agent_start` metric is recorded too.
+
+`R` is rejected for `running`/`queued` agents (already active) and for
+`done`/`awaiting-review` (intentional terminal states). Killed (`k`) and
+`done-dry` agents are eligible.
+
 ## Auto-spawn
 
 Toggle per repo with the `a` key in the TUI. While on, a poller (default every
@@ -328,7 +369,9 @@ On every TUI start, persisted agents are reconciled before render:
 | `Enter`   | spawn agent on selected issue |
 | `d`       | delete worktree of focused agent (confirms `y/n`) |
 | `k`       | kill process of focused agent |
+| `R`       | re-spawn focused failed/killed/dry agent (keeps worktree+branch) |
 | `l`       | fullscreen log view |
+| `v`       | fullscreen worktree diff (commits + unified diff vs `origin/<base>`) |
 | `PgUp`/`PgDn` | scroll log ±10 lines (in log pane) |
 | `g` / `G` | jump to top (oldest) / tail-follow (newest) in the log pane |
 | `f`       | cycle log filter: `all → no-thinking → tools → errors` |
@@ -341,6 +384,10 @@ On every TUI start, persisted agents are reconciled before render:
 
 At spawn time the `SpawnModal` accepts `m` (mr), `r` (review), `d` (dry),
 `Enter` (default), or `Esc` (cancel).
+
+In the diff view (`v`): `↑/↓`, `PgUp/PgDn`, `g`/`G` scroll the same way as
+the log pane. `r` re-runs the git commands (handy when the agent commits
+while you're looking). `esc`/`v`/`q` returns to the main view.
 
 ### Log filters
 

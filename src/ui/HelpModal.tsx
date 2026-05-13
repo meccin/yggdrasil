@@ -16,7 +16,9 @@ const NAVIGATION: Row[] = [
 const AGENT: Row[] = [
   { key: "d", label: "delete worktree of focused agent (confirms y/n)" },
   { key: "k", label: "kill process of focused agent" },
+  { key: "R", label: "re-spawn failed/killed/dry agent (keeps worktree)" },
   { key: "l", label: "fullscreen log view" },
+  { key: "v", label: "fullscreen worktree diff (commits + unified diff)" },
 ];
 
 const LOG: Row[] = [

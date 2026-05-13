@@ -7,7 +7,7 @@ import { ensureUserDirs, userDir, configFile } from "./paths";
 import { aggregate, formatReport, readMetrics } from "./metrics";
 import type { Provider, RepoConfig } from "./types";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 
 const printHelp = (): void => {
   console.log(`Yggdrasil ${VERSION} — TUI multi-agent dashboard
@@ -29,6 +29,12 @@ Usage:
                                        --settings PATH|none     (claude settings JSON)
                                        --reset-tools            (clear repo override → inherit global)
   ygg repo rm <name>                 remove repo by name
+  ygg config show                    print global defaults
+  ygg config set [opts]              edit global defaults
+                                       --poll-interval N        seconds (>= 60)
+                                       --max-concurrent N       1..10
+                                       --permission-mode MODE
+                                       --default-mode mr|review|dry
   ygg metrics [opts]                 show usage metrics
                                        --repo NAME
                                        --since YYYY-MM-DD
@@ -326,6 +332,96 @@ const cmdRepoSet = (rawArgs: string[]): number => {
   return 0;
 };
 
+const cmdConfigShow = (): number => {
+  const cfg = loadConfig();
+  console.log("Global defaults:");
+  console.log(`  permissionMode:   ${cfg.permissionMode}`);
+  console.log(`  defaultMode:      ${cfg.defaultMode}`);
+  console.log(`  maxConcurrent:    ${cfg.maxConcurrent}`);
+  console.log(`  pollIntervalSec:  ${cfg.pollIntervalSec}`);
+  console.log(`  allowedTools:     ${cfg.allowedTools.join(", ") || "(none)"}`);
+  console.log(`  disallowedTools:  ${cfg.disallowedTools.join(", ") || "(none)"}`);
+  console.log(`  settingsPath:     ${cfg.settingsPath || "(none)"}`);
+  console.log(`  repos:            ${cfg.repos.length}`);
+  return 0;
+};
+
+const cmdConfigSet = (rawArgs: string[]): number => {
+  const args = [...rawArgs];
+  const pop = (flag: string): string | undefined => {
+    const idx = args.indexOf(flag);
+    if (idx >= 0) {
+      const v = args[idx + 1];
+      args.splice(idx, 2);
+      return v;
+    }
+    return undefined;
+  };
+
+  if (args.length === 0) {
+    console.error(
+      "usage: ygg config set [--poll-interval N] [--max-concurrent N] [--permission-mode MODE] [--default-mode mr|review|dry]",
+    );
+    return 1;
+  }
+
+  const cfg = loadConfig();
+  const next = { ...cfg };
+  const changes: string[] = [];
+
+  const pollArg = pop("--poll-interval");
+  if (pollArg !== undefined) {
+    const n = Number(pollArg);
+    if (!Number.isFinite(n) || n < 60) {
+      console.error(`invalid --poll-interval: ${pollArg} (must be >= 60)`);
+      return 1;
+    }
+    next.pollIntervalSec = Math.floor(n);
+    changes.push(`pollIntervalSec=${next.pollIntervalSec}`);
+  }
+
+  const concArg = pop("--max-concurrent");
+  if (concArg !== undefined) {
+    const n = Number(concArg);
+    if (!Number.isFinite(n) || n < 1 || n > 10) {
+      console.error(`invalid --max-concurrent: ${concArg} (must be 1..10)`);
+      return 1;
+    }
+    next.maxConcurrent = Math.floor(n);
+    changes.push(`maxConcurrent=${next.maxConcurrent}`);
+  }
+
+  const permArg = pop("--permission-mode");
+  if (permArg !== undefined) {
+    const valid = ["acceptEdits", "auto", "bypassPermissions", "default", "dontAsk", "plan"];
+    if (!valid.includes(permArg)) {
+      console.error(`invalid --permission-mode: ${permArg}`);
+      return 1;
+    }
+    next.permissionMode = permArg as typeof next.permissionMode;
+    changes.push(`permissionMode=${permArg}`);
+  }
+
+  const modeArg = pop("--default-mode");
+  if (modeArg !== undefined) {
+    if (modeArg !== "mr" && modeArg !== "review" && modeArg !== "dry") {
+      console.error(`invalid --default-mode: ${modeArg}`);
+      return 1;
+    }
+    next.defaultMode = modeArg;
+    changes.push(`defaultMode=${modeArg}`);
+  }
+
+  if (changes.length === 0) {
+    console.error("no recognized flags passed; nothing changed");
+    return 1;
+  }
+
+  saveConfig(next);
+  console.log(`✓ config updated: ${changes.join(", ")}`);
+  return 0;
+};
+
 const cmdRepoRm = (args: string[]): number => {
   const name = args[0];
   if (!name) {
@@ -407,6 +503,14 @@ export const main = async (argv: string[]): Promise<number> => {
     if (sub === "rm" || sub === "remove") return cmdRepoRm(subArgs);
     if (sub === "set") return cmdRepoSet(subArgs);
     console.error("usage: ygg repo <add|list|rm|set>");
+    return 1;
+  }
+  if (cmd === "config") {
+    const sub = rest[0];
+    const subArgs = rest.slice(1);
+    if (sub === "show" || sub === "ls" || sub === undefined) return cmdConfigShow();
+    if (sub === "set") return cmdConfigSet(subArgs);
+    console.error("usage: ygg config <show|set>");
     return 1;
   }
   console.error(`unknown command: ${cmd}`);

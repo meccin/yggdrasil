@@ -8,7 +8,7 @@ export interface WorktreeRef {
   branch: string;
 }
 
-const detectDefaultBranch = (repoPath: string): string => {
+export const detectDefaultBranch = (repoPath: string): string => {
   const head = runGit(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], repoPath);
   if (head.ok) {
     const m = head.stdout.trim().match(/^origin\/(.+)$/);
@@ -23,7 +23,7 @@ const detectDefaultBranch = (repoPath: string): string => {
 
 // A valid worktree directory contains a `.git` file (a regular file, NOT a
 // directory) whose contents point back at the main repo's worktrees registry.
-const isValidWorktree = (path: string): boolean => {
+export const isValidWorktree = (path: string): boolean => {
   if (!existsSync(path)) return false;
   const gitPath = join(path, ".git");
   if (!existsSync(gitPath)) return false;

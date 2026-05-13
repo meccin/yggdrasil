@@ -5,17 +5,40 @@ import { RepoBar } from "./RepoBar";
 import { IssueList } from "./IssueList";
 import { AgentGrid } from "./AgentGrid";
 import { LogPane, type LogFilter, LOG_FILTER_ORDER } from "./LogPane";
+import { DiffPane } from "./DiffPane";
 import { SpawnModal } from "./SpawnModal";
 import { HelpModal } from "./HelpModal";
 import { getState, useStore, useStoreShallow } from "./useStore";
 import type { FinalizeMode } from "../types";
 import type { Issue } from "../sources/types";
-import { spawnAgentForIssue, killAgentById, deleteAgentArtifacts } from "../agent/orchestrator";
+import {
+  spawnAgentForIssue,
+  killAgentById,
+  deleteAgentArtifacts,
+  respawnFailedAgent,
+} from "../agent/orchestrator";
 import { forceTick } from "../auto/poller";
 import { resolveMode } from "../config";
 
 type Pane = "repos" | "issues" | "agents" | "log";
 const PANE_ORDER: Pane[] = ["repos", "issues", "agents", "log"];
+
+// Build the footer hint string from the focused agent's state so action keys
+// (kill/delete/re-spawn/log/diff) only show when they actually do something.
+// Reduces noise and keeps the line from wrapping on narrower terminals.
+const footerHints = (agent: { status: string } | undefined): string => {
+  const parts: string[] = ["tab:focus", "enter:spawn"];
+  if (agent) {
+    if (agent.status === "running") parts.push("k:kill");
+    else parts.push("d:delete");
+    if (agent.status === "failed" || agent.status === "killed" || agent.status === "done-dry") {
+      parts.push("R:re-spawn");
+    }
+    parts.push("l:log", "v:diff");
+  }
+  parts.push("f:filter", "a:auto", "p:poll", "+/-:conc", "?:help", "q:quit");
+  return parts.join(" · ");
+};
 
 export const App: React.FC = () => {
   const { exit } = useApp();
@@ -27,6 +50,7 @@ export const App: React.FC = () => {
 
   const [modal, setModal] = useState<null | { issue: Issue }>(null);
   const [fullLog, setFullLog] = useState(false);
+  const [fullDiff, setFullDiff] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [quitConfirm, setQuitConfirm] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState<null | { id: string; short: string }>(null);
@@ -35,6 +59,10 @@ export const App: React.FC = () => {
   // the tail; any number pins the window to a slice of the filtered log.
   const [logTopIdx, setLogTopIdx] = useState<number | null>(null);
   const [logFilter, setLogFilter] = useState<LogFilter>("all");
+  // Diff view state: scroll position + bump-on-refresh counter so DiffPane
+  // re-fetches git output without remounting.
+  const [diffTopIdx, setDiffTopIdx] = useState<number | null>(null);
+  const [diffRefreshKey, setDiffRefreshKey] = useState(0);
 
   // No manual screen clears on view transitions: useEffect fires AFTER Ink
   // commits a frame, so writing escape codes here would erase the freshly
@@ -126,6 +154,44 @@ export const App: React.FC = () => {
 
     if (fullLog) {
       if (key.escape || input === "l" || input === "q") setFullLog(false);
+      return;
+    }
+
+    if (fullDiff) {
+      if (key.escape || input === "v" || input === "q") {
+        setFullDiff(false);
+        return;
+      }
+      if (input === "r") {
+        setDiffRefreshKey((n) => n + 1);
+        setDiffTopIdx(null);
+        return;
+      }
+      if (key.upArrow) {
+        setDiffTopIdx((cur) => Math.max(0, (cur ?? 0) - 1));
+        return;
+      }
+      if (key.downArrow) {
+        setDiffTopIdx((cur) => (cur ?? 0) + 1);
+        return;
+      }
+      if (key.pageUp) {
+        setDiffTopIdx((cur) => Math.max(0, (cur ?? 0) - 10));
+        return;
+      }
+      if (key.pageDown) {
+        setDiffTopIdx((cur) => (cur ?? 0) + 10);
+        return;
+      }
+      if (input === "g") {
+        setDiffTopIdx(0);
+        return;
+      }
+      if (input === "G") {
+        // Park at a very large index; DiffPane clamps to maxTop.
+        setDiffTopIdx(Number.MAX_SAFE_INTEGER);
+        return;
+      }
       return;
     }
 
@@ -237,6 +303,33 @@ export const App: React.FC = () => {
       case "l":
         if (currentAgent()) setFullLog(true);
         return;
+      case "v": {
+        const a = currentAgent();
+        if (!a) {
+          showFlash("no agent focused");
+          return;
+        }
+        setDiffTopIdx(0);
+        setDiffRefreshKey((n) => n + 1);
+        setFullDiff(true);
+        return;
+      }
+      case "R": {
+        const a = currentAgent();
+        if (!a) return;
+        if (a.status === "running" || a.status === "queued") {
+          showFlash("agent already active");
+          return;
+        }
+        if (a.status === "awaiting-review" || a.status === "done") {
+          showFlash("only failed/killed/dry agents can re-spawn");
+          return;
+        }
+        respawnFailedAgent(a.id).then((r) => {
+          showFlash(r.ok ? `respawned ${a.id.slice(0, 8)}` : `respawn failed: ${r.error}`);
+        });
+        return;
+      }
       case "p": {
         const anyAuto = repos.some((r) => r.autoSpawn);
         if (!anyAuto) {
@@ -282,6 +375,18 @@ export const App: React.FC = () => {
     );
   }
 
+  if (fullDiff) {
+    return (
+      <Box flexDirection="column">
+        <Header />
+        <DiffPane topIdx={diffTopIdx} refreshKey={diffRefreshKey} />
+        <Box paddingX={1}>
+          <Text dimColor>esc/v/q: back · ↑/↓ pageup/pagedown g/G: scroll · r: refresh</Text>
+        </Box>
+      </Box>
+    );
+  }
+
   return (
     <Box flexDirection="column">
       <Header />
@@ -296,9 +401,7 @@ export const App: React.FC = () => {
         </Box>
       </Box>
       <Box paddingX={1} borderStyle="single" borderColor="gray">
-        <Text dimColor>
-          tab:focus · enter:spawn · d:delete · k:kill · l:log · f:filter · a:auto · p:poll · +/-:conc · ?:help · q:quit
-        </Text>
+        <Text dimColor>{footerHints(currentAgent())}</Text>
       </Box>
       {flash && (
         <Box paddingX={1}>
