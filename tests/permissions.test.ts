@@ -15,6 +15,7 @@ const baseGlobal: GlobalConfig = {
   allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
   disallowedTools: ["Bash(rm *)"],
   settingsPath: "/etc/global-claude-settings.json",
+  notifications: true,
   repos: [],
 };
 

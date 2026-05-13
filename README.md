@@ -6,6 +6,20 @@ Dispatch N agents in parallel, each working on its own issue inside an isolated
 
 > *"From Yggdrasil's branches, ravens fly to every realm."*
 
+## Screenshots
+
+**Main view** — issues, agents, and the live log:
+
+![Main view](docs/screenshots/yggdrasil-main-view.png)
+
+**Diff viewer** (`v`) — commits + unified diff vs `origin/<base>`:
+
+![Diff view](docs/screenshots/yggdrasil-diff-view.png)
+
+**Help modal** (`?`) — keybindings and status reference:
+
+![Help view](docs/screenshots/yggdrasil-help-view.png)
+
 ## Requirements
 
 - [Bun](https://bun.sh)
@@ -246,6 +260,11 @@ same shape as `~/.claude/settings.json` (notably the `permissions` block with
 and parses as JSON. Clear it back to inheriting the global default with
 `--settings none`.
 
+`ygg doctor` also emits a warning (non-fatal) when a repo runs the most
+permissive combination: `permissionMode: bypassPermissions` with an
+empty effective allowlist. Worktree is the only blast-radius boundary in
+that case — the warning is there to make sure that's intentional.
+
 ### Recommended hardening for headless
 
 ```bash
@@ -282,6 +301,22 @@ ygg config set --poll-interval 60 --max-concurrent 5
 `ygg config set` validates each flag (poll interval `>= 60`, concurrency
 `1..10`, etc.) before writing. Per-repo overrides keep flowing through
 `ygg repo set` / `ygg repo list`.
+
+### Desktop notifications
+
+Default `on`. When an agent reaches a terminal status (`done`, `done-dry`,
+`awaiting-review`, `failed`, `killed`), Yggdrasil fires a desktop
+notification with the issue id, title, and outcome — so you can context-
+switch away from the TUI without losing track of long runs.
+
+```bash
+ygg config set --notifications off    # disable
+ygg config set --notifications on     # re-enable
+```
+
+Backend: `osascript` on macOS, `notify-send` on Linux, silent no-op on
+Windows or when the helper binary isn't installed. Failures inside the
+notifier are swallowed — they never crash the parent TUI.
 
 ## Re-spawning failed agents
 

@@ -26,6 +26,7 @@ const baseConfig: GlobalConfig = {
   allowedTools: ["Read"],
   disallowedTools: [],
   settingsPath: null,
+  notifications: true,
   repos: [baseRepo],
 };
 

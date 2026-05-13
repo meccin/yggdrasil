@@ -10,6 +10,7 @@ const baseGlobal: GlobalConfig = {
   allowedTools: ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
   disallowedTools: [],
   settingsPath: null,
+  notifications: true,
   repos: [],
 };
 

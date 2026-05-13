@@ -18,6 +18,7 @@ const DEFAULT_CONFIG: GlobalConfig = {
   allowedTools: [...DEFAULT_ALLOWED_TOOLS],
   disallowedTools: [],
   settingsPath: null,
+  notifications: true,
   repos: [],
 };
 
@@ -75,6 +76,8 @@ const validateConfig = (raw: any): GlobalConfig => {
     ? cfg.disallowedTools.map(String)
     : [];
   cfg.settingsPath = cfg.settingsPath ? String(cfg.settingsPath) : null;
+  cfg.notifications =
+    typeof cfg.notifications === "boolean" ? cfg.notifications : true;
   cfg.repos = cfg.repos.map(normalizeRepo);
   return cfg;
 };

@@ -1,13 +1,20 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { spawnSync } from "node:child_process";
-import { loadConfig, saveConfig, upsertRepo, removeRepo } from "./config";
+import {
+  loadConfig,
+  saveConfig,
+  upsertRepo,
+  removeRepo,
+  resolveAllowedTools,
+  resolvePermissionMode,
+} from "./config";
 import { detectRemote, repoNameFromPath } from "./sources";
 import { ensureUserDirs, userDir, configFile } from "./paths";
 import { aggregate, formatReport, readMetrics } from "./metrics";
 import type { Provider, RepoConfig } from "./types";
 
-const VERSION = "0.7.0";
+const VERSION = "0.8.0";
 
 const printHelp = (): void => {
   console.log(`Yggdrasil ${VERSION} — TUI multi-agent dashboard
@@ -35,6 +42,7 @@ Usage:
                                        --max-concurrent N       1..10
                                        --permission-mode MODE
                                        --default-mode mr|review|dry
+                                       --notifications on|off
   ygg metrics [opts]                 show usage metrics
                                        --repo NAME
                                        --since YYYY-MM-DD
@@ -69,6 +77,11 @@ const cmdDoctor = (): number => {
   const check = (label: string, pass: boolean, hint?: string) => {
     console.log(`${pass ? "✓" : "✗"} ${label}${pass ? "" : hint ? "  → " + hint : ""}`);
     if (!pass) ok = false;
+  };
+  // Warnings don't fail the doctor — they're informational. Exit code stays
+  // driven by `check()`.
+  const warn = (label: string, hint?: string) => {
+    console.log(`⚠ ${label}${hint ? "  → " + hint : ""}`);
   };
   check("bin: claude", hasBin("claude"), "install Claude Code CLI");
   check("bin: git", hasBin("git"));
@@ -111,6 +124,20 @@ const cmdDoctor = (): number => {
       parses = false;
     }
     check(`settings (${s.source}): ${s.path}`, parses, "file is not valid JSON");
+  }
+
+  // Surface the most permissive-by-construction combo: bypassPermissions with
+  // nothing on the allowlist. Worktree is the only blast-radius boundary at
+  // that point. Doesn't fail the doctor — informational.
+  for (const r of cfg.repos) {
+    const perm = resolvePermissionMode(cfg, r);
+    const allow = resolveAllowedTools(cfg, r);
+    if (perm === "bypassPermissions" && allow.length === 0) {
+      warn(
+        `  repo ${r.name}: bypassPermissions + empty allowlist`,
+        "agents run unrestricted; add --allow-tool or switch to --permission-mode dontAsk",
+      );
+    }
   }
 
   return ok ? 0 : 1;
@@ -342,6 +369,7 @@ const cmdConfigShow = (): number => {
   console.log(`  allowedTools:     ${cfg.allowedTools.join(", ") || "(none)"}`);
   console.log(`  disallowedTools:  ${cfg.disallowedTools.join(", ") || "(none)"}`);
   console.log(`  settingsPath:     ${cfg.settingsPath || "(none)"}`);
+  console.log(`  notifications:    ${cfg.notifications ? "on" : "off"}`);
   console.log(`  repos:            ${cfg.repos.length}`);
   return 0;
 };
@@ -410,6 +438,18 @@ const cmdConfigSet = (rawArgs: string[]): number => {
     }
     next.defaultMode = modeArg;
     changes.push(`defaultMode=${modeArg}`);
+  }
+
+  const notifArg = pop("--notifications");
+  if (notifArg !== undefined) {
+    const v = notifArg.toLowerCase();
+    if (v === "on" || v === "true") next.notifications = true;
+    else if (v === "off" || v === "false") next.notifications = false;
+    else {
+      console.error(`invalid --notifications: ${notifArg} (use on|off)`);
+      return 1;
+    }
+    changes.push(`notifications=${next.notifications ? "on" : "off"}`);
   }
 
   if (changes.length === 0) {

@@ -42,6 +42,10 @@ export interface GlobalConfig {
   allowedTools: string[];
   disallowedTools: string[];
   settingsPath: string | null;
+  // Fire a desktop notification when an agent transitions to a terminal
+  // status (done / done-dry / awaiting-review / failed / killed). Lets the
+  // user close the TUI without losing awareness. Default: true.
+  notifications: boolean;
   repos: RepoConfig[];
 }
 

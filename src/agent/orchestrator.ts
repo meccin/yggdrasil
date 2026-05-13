@@ -14,6 +14,18 @@ import { buildPrompt, killAgent, spawnAgent } from "./runner";
 import { finalize } from "./finalize";
 import { getSource } from "../sources";
 import { recordMetric } from "../metrics";
+import { notify } from "../notify";
+
+const maybeNotify = (
+  repo: RepoConfig,
+  agent: Agent,
+  status: Agent["status"],
+): void => {
+  if (!store.getState().config.notifications) return;
+  const title = `Yggdrasil · ${repo.name}`;
+  const body = `#${agent.issueId} ${agent.issueTitle} — ${status}`;
+  notify(title, body);
+};
 
 const now = () => Date.now();
 
@@ -61,22 +73,27 @@ const launchClaude = (
       };
       if (cur.status === "killed") {
         finishMetric("killed");
+        maybeNotify(repo, agent, "killed");
         return;
       }
       if (code !== 0) {
         store.getState().updateAgent(agent.id, { errorMessage: `claude exit ${code}` });
         store.getState().setStatus(agent.id, "failed");
         finishMetric("failed", `claude exit ${code}`);
+        maybeNotify(repo, agent, "failed");
         return;
       }
       try {
         await finalize(cur, repo, mode);
         const final = store.getState().agents[agent.id];
-        finishMetric(final?.status || "done", final?.errorMessage);
+        const status = final?.status || "done";
+        finishMetric(status, final?.errorMessage);
+        maybeNotify(repo, agent, status);
       } catch (err) {
         store.getState().updateAgent(agent.id, { errorMessage: (err as Error).message });
         store.getState().setStatus(agent.id, "failed");
         finishMetric("failed", (err as Error).message);
+        maybeNotify(repo, agent, "failed");
       }
     },
   });
