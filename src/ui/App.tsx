@@ -1,0 +1,334 @@
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import { Box, Text, useApp, useInput } from "ink";
+import { Header } from "./Header";
+import { RepoBar } from "./RepoBar";
+import { IssueList } from "./IssueList";
+import { AgentGrid } from "./AgentGrid";
+import { LogPane, type LogFilter, LOG_FILTER_ORDER } from "./LogPane";
+import { SpawnModal } from "./SpawnModal";
+import { HelpModal } from "./HelpModal";
+import { getState, useStore, useStoreShallow } from "./useStore";
+import type { FinalizeMode } from "../types";
+import type { Issue } from "../sources/types";
+import { spawnAgentForIssue, killAgentById, deleteAgentArtifacts } from "../agent/orchestrator";
+import { forceTick } from "../auto/poller";
+import { resolveMode } from "../config";
+
+type Pane = "repos" | "issues" | "agents" | "log";
+const PANE_ORDER: Pane[] = ["repos", "issues", "agents", "log"];
+
+export const App: React.FC = () => {
+  const { exit } = useApp();
+  const focus = useStoreShallow((s) => s.focus);
+  const repos = useStoreShallow((s) => s.config.repos);
+  const agentMap = useStoreShallow((s) => s.agents);
+  const issuesByRepo = useStoreShallow((s) => s.issuesByRepo);
+  const cfg = useStore((s) => s.config);
+
+  const [modal, setModal] = useState<null | { issue: Issue }>(null);
+  const [fullLog, setFullLog] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
+  const [quitConfirm, setQuitConfirm] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState<null | { id: string; short: string }>(null);
+  const [flash, setFlash] = useState<string | null>(null);
+  // Scroll/filter state for the log pane. `logTopIdx === null` means follow
+  // the tail; any number pins the window to a slice of the filtered log.
+  const [logTopIdx, setLogTopIdx] = useState<number | null>(null);
+  const [logFilter, setLogFilter] = useState<LogFilter>("all");
+
+  // Clear the screen ONLY on view transitions (main ⇄ fullLog ⇄ helpOpen), not
+  // on mount: the mount-time clear desyncs Ink's log-update anchor and causes
+  // every later re-render to stack below the original paint.
+  const skipMountClear = useRef(true);
+  useEffect(() => {
+    if (skipMountClear.current) {
+      skipMountClear.current = false;
+      return;
+    }
+    process.stdout.write("\x1b[2J\x1b[H");
+  }, [fullLog, helpOpen]);
+
+  // Reset log scroll back to tail-follow whenever the focused agent changes
+  // so the user is never staring at a frozen window for the wrong run.
+  useEffect(() => {
+    setLogTopIdx(null);
+  }, [focus.agentIdx]);
+
+  const showFlash = (msg: string) => {
+    setFlash(msg);
+    setTimeout(() => setFlash(null), 2500);
+  };
+
+  const sortedAgents = useMemo(
+    () => Object.values(agentMap).sort((a, b) => a.startedAt - b.startedAt),
+    [agentMap],
+  );
+
+  const currentRepo = () => repos[focus.repoIdx];
+  const currentIssues = (): Issue[] => {
+    const r = currentRepo();
+    if (!r) return [];
+    return issuesByRepo[r.name] || [];
+  };
+  const currentIssue = () => currentIssues()[focus.issueIdx];
+  const currentAgent = () => sortedAgents[focus.agentIdx];
+
+  const startSpawn = (mode: FinalizeMode) => {
+    if (!modal) return;
+    const repo = currentRepo();
+    if (!repo) return;
+    const issue = modal.issue;
+    setModal(null);
+    spawnAgentForIssue(repo, issue, mode).then((res) => {
+      if (!res.ok) showFlash(`spawn failed: ${res.error}`);
+      else showFlash(`agent launched · ${mode}`);
+    });
+  };
+
+  useInput((input, key) => {
+    // Panic close: Ctrl+C always exits (raw mode swallows SIGINT, so handle here).
+    if (key.ctrl && (input === "c" || input === "C")) {
+      exit();
+      return;
+    }
+
+    if (quitConfirm) {
+      if (input === "y" || input === "Y") exit();
+      else if (input === "n" || key.escape) setQuitConfirm(false);
+      return;
+    }
+
+    if (deleteConfirm) {
+      if (input === "y" || input === "Y") {
+        deleteAgentArtifacts(deleteConfirm.id, true);
+        showFlash(`deleted ${deleteConfirm.short}`);
+        setDeleteConfirm(null);
+      } else if (input === "n" || key.escape) {
+        setDeleteConfirm(null);
+      }
+      return;
+    }
+
+    if (helpOpen) {
+      // Any common close key dismisses the help page.
+      if (key.escape || input === "?" || input === "q" || key.return || input === " ") {
+        setHelpOpen(false);
+      }
+      return;
+    }
+
+    if (modal) {
+      if (key.escape) return setModal(null);
+      if (input === "m") return startSpawn("mr");
+      if (input === "r") return startSpawn("review");
+      if (input === "d") return startSpawn("dry");
+      if (key.return) {
+        const r = currentRepo();
+        if (r) return startSpawn(resolveMode(cfg, r));
+      }
+      return;
+    }
+
+    if (fullLog) {
+      if (key.escape || input === "l" || input === "q") setFullLog(false);
+      return;
+    }
+
+    if (key.tab) {
+      const idx = PANE_ORDER.indexOf(focus.pane);
+      const next = PANE_ORDER[(idx + 1) % PANE_ORDER.length];
+      getState().setFocus({ pane: next });
+      return;
+    }
+
+    if (key.upArrow || key.downArrow) {
+      const delta = key.upArrow ? -1 : 1;
+      if (focus.pane === "repos") {
+        if (repos.length === 0) return;
+        const next = (focus.repoIdx + delta + repos.length) % repos.length;
+        getState().setFocus({ repoIdx: next, issueIdx: 0 });
+      } else if (focus.pane === "issues") {
+        const arr = currentIssues();
+        if (arr.length === 0) return;
+        const next = (focus.issueIdx + delta + arr.length) % arr.length;
+        getState().setFocus({ issueIdx: next });
+      } else if (focus.pane === "agents") {
+        if (sortedAgents.length === 0) return;
+        const next = (focus.agentIdx + delta + sortedAgents.length) % sortedAgents.length;
+        getState().setFocus({ agentIdx: next });
+        setLogTopIdx(null);
+      } else if (focus.pane === "log") {
+        // Step the log window one event at a time. Crossing into the tail
+        // (top + window ≥ length) restores tail-follow mode.
+        setLogTopIdx((cur) => (cur ?? Infinity) + delta);
+      }
+      return;
+    }
+
+    if (key.pageUp || key.pageDown) {
+      if (focus.pane === "log") {
+        const step = key.pageUp ? -10 : 10;
+        setLogTopIdx((cur) => (cur ?? Infinity) + step);
+      }
+      return;
+    }
+
+    if (focus.pane === "log" && (input === "g" || input === "G")) {
+      // vim-style: `g` → top of log (oldest), `G` → tail-follow.
+      setLogTopIdx(input === "g" ? 0 : null);
+      return;
+    }
+
+    if (key.leftArrow || key.rightArrow) {
+      if (focus.pane === "repos" && repos.length > 0) {
+        const delta = key.leftArrow ? -1 : 1;
+        const next = (focus.repoIdx + delta + repos.length) % repos.length;
+        getState().setFocus({ repoIdx: next, issueIdx: 0 });
+      }
+      return;
+    }
+
+    if (key.return) {
+      if (focus.pane === "issues") {
+        const issue = currentIssue();
+        const repo = currentRepo();
+        if (issue && repo) setModal({ issue });
+        else showFlash("no issue/repo selected");
+      }
+      return;
+    }
+
+    switch (input) {
+      case "?":
+        setHelpOpen(true);
+        return;
+      case "q":
+        if (sortedAgents.some((a) => a.status === "running")) setQuitConfirm(true);
+        else exit();
+        return;
+      case "a": {
+        const repo = currentRepo();
+        if (repo) {
+          getState().toggleAutoSpawn(repo.name);
+          showFlash(`autoSpawn · ${repo.name} → ${!repo.autoSpawn}`);
+        }
+        return;
+      }
+      case "k": {
+        const a = currentAgent();
+        if (a && a.status === "running") {
+          killAgentById(a.id);
+          showFlash(`killed ${a.id.slice(0, 8)}`);
+        }
+        return;
+      }
+      case "d": {
+        const a = currentAgent();
+        if (a && a.status !== "running") {
+          setDeleteConfirm({ id: a.id, short: a.id.slice(0, 8) });
+        } else if (a) {
+          showFlash("kill before delete");
+        }
+        return;
+      }
+      case "f": {
+        const idx = LOG_FILTER_ORDER.indexOf(logFilter);
+        const next = LOG_FILTER_ORDER[(idx + 1) % LOG_FILTER_ORDER.length];
+        setLogFilter(next);
+        setLogTopIdx(null);
+        showFlash(`filter: ${next}`);
+        return;
+      }
+      case "l":
+        if (currentAgent()) setFullLog(true);
+        return;
+      case "p": {
+        const anyAuto = repos.some((r) => r.autoSpawn);
+        if (!anyAuto) {
+          showFlash("no repo has autoSpawn on");
+          return;
+        }
+        showFlash("polling…");
+        forceTick().then((res) => {
+          if (!res.ok) showFlash("poll already running");
+          else showFlash(res.ranAny ? "poll: spawned new agent(s)" : "poll: nothing new");
+        });
+        return;
+      }
+      case "+":
+      case "=":
+        getState().bumpConcurrency(1);
+        return;
+      case "-":
+      case "_":
+        getState().bumpConcurrency(-1);
+        return;
+    }
+  });
+
+  if (helpOpen) {
+    return (
+      <Box flexDirection="column">
+        <Header />
+        <HelpModal />
+      </Box>
+    );
+  }
+
+  if (fullLog) {
+    return (
+      <Box flexDirection="column">
+        <Header />
+        <LogPane fullscreen topIdx={logTopIdx} filter={logFilter} />
+        <Box paddingX={1}>
+          <Text dimColor>esc/l/q: back · ↑/↓ pageup/pagedown g/G: scroll · f: filter</Text>
+        </Box>
+      </Box>
+    );
+  }
+
+  return (
+    <Box flexDirection="column">
+      <Header />
+      <RepoBar />
+      <Box flexDirection="column" flexGrow={1}>
+        <Box flexShrink={0}>
+          <IssueList />
+          <AgentGrid />
+        </Box>
+        <Box flexGrow={1}>
+          <LogPane topIdx={logTopIdx} filter={logFilter} />
+        </Box>
+      </Box>
+      <Box paddingX={1} borderStyle="single" borderColor="gray">
+        <Text dimColor>
+          tab:focus · enter:spawn · d:delete · k:kill · l:log · f:filter · a:auto · p:poll · +/-:conc · ?:help · q:quit
+        </Text>
+      </Box>
+      {flash && (
+        <Box paddingX={1}>
+          <Text color="magenta">{flash}</Text>
+        </Box>
+      )}
+      {quitConfirm && (
+        <Box borderStyle="double" borderColor="red" paddingX={1}>
+          <Text color="red" bold>Agents are running. Quit anyway? (y/n)</Text>
+        </Box>
+      )}
+      {deleteConfirm && (
+        <Box borderStyle="double" borderColor="yellow" paddingX={1}>
+          <Text color="yellow" bold>
+            Delete agent {deleteConfirm.short} (worktree + branch)? (y/n)
+          </Text>
+        </Box>
+      )}
+      {modal && currentRepo() && (
+        <SpawnModal
+          repo={currentRepo()!}
+          issue={modal.issue}
+          defaultMode={resolveMode(cfg, currentRepo()!)}
+        />
+      )}
+    </Box>
+  );
+};
