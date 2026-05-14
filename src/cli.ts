@@ -22,7 +22,7 @@ import {
   scaffoldOpenspec,
 } from "./profile";
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 const printHelp = (): void => {
   console.log(`Yggdrasil ${VERSION} — TUI multi-agent dashboard

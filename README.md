@@ -333,9 +333,9 @@ notifier are swallowed — they never crash the parent TUI.
 ## Profiles (pipelines)
 
 By default each agent runs **one** `claude -p` invocation per issue. For workflows that
-split planning, implementing, and evaluating into discrete phases (Sleipnir/harness,
-OpenSpec, etc.), Yggdrasil can drive a **linear pipeline** of slash-commands instead —
-configured via a *profile*.
+split planning, implementing, and evaluating into discrete phases
+([Sleipnir](https://github.com/meccin/sleipnir)/harness, OpenSpec, etc.), Yggdrasil can
+drive a **linear pipeline** of slash-commands instead — configured via a *profile*.
 
 A profile is a JSON file in `~/.yggdrasil/profiles/<name>.json` describing the ordered
 steps. Each step is one `claude -p "<command> <args>"` call inside the same worktree as
@@ -422,8 +422,9 @@ Literal `{{` cannot be escaped in v1.0.0 — write that elsewhere if you need it
 ### Loops & retries
 
 Yggdrasil **does not loop steps in v1.0.0**. If your final step needs to retry on
-sensor failure, that retry must happen *inside* that slash-command — Sleipnir's full-
-auto mode already does this. Yggdrasil-driven retry loops are tracked for post-v1.0.0.
+sensor failure, that retry must happen *inside* that slash-command —
+[Sleipnir](https://github.com/meccin/sleipnir)'s full-auto mode already does this.
+Yggdrasil-driven retry loops are tracked for post-v1.0.0.
 
 ### TUI
 
