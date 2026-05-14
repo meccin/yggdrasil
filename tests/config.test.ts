@@ -11,6 +11,7 @@ const baseGlobal: GlobalConfig = {
   disallowedTools: [],
   settingsPath: null,
   notifications: true,
+  profile: null,
   repos: [],
 };
 
@@ -27,6 +28,7 @@ const baseRepo: RepoConfig = {
   allowedTools: null,
   disallowedTools: null,
   settingsPath: null,
+  profile: null,
 };
 
 describe("resolvePermissionMode", () => {

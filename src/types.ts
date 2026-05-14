@@ -32,6 +32,11 @@ export interface RepoConfig {
   // Path to a Claude Code settings JSON forwarded via `--settings`. Same shape
   // as ~/.claude/settings.json (permissions.allow/deny/ask blocks supported).
   settingsPath: string | null;
+  // Profile name resolved against ~/.yggdrasil/profiles/<name>.json. null on
+  // the repo means "inherit the global default"; an explicit empty string is
+  // not used. When neither global nor repo references a profile, the agent
+  // runs a single classic prompt via buildPrompt().
+  profile: string | null;
 }
 
 export interface GlobalConfig {
@@ -46,6 +51,9 @@ export interface GlobalConfig {
   // status (done / done-dry / awaiting-review / failed / killed). Lets the
   // user close the TUI without losing awareness. Default: true.
   notifications: boolean;
+  // Optional default profile name (resolved against ~/.yggdrasil/profiles/).
+  // Repo-level `profile` overrides this. null = no pipeline (classic prompt).
+  profile: string | null;
   repos: RepoConfig[];
 }
 
@@ -89,4 +97,10 @@ export interface Agent {
   log: AgentEvent[];
   errorMessage?: string;
   mrUrl?: string;
+  // Set when the agent is running a profile pipeline. 0-based index of the
+  // step currently executing (or just finished). undefined for classic runs
+  // and terminal agents whose final state wasn't captured before the field
+  // was cleared.
+  currentStep?: number;
+  totalSteps?: number;
 }

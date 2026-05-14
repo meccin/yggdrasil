@@ -16,6 +16,11 @@ interface SpawnOpts {
   disallowedTools?: string[];
   // Path to a Claude Code settings JSON forwarded via `--settings`.
   settingsPath?: string | null;
+  // Cumulative tokens already accrued before this spawn. When set, `usage`
+  // events emitted to the store add the baseline so per-process counters
+  // don't rewind between profile steps (each `claude -p` is a fresh session
+  // whose `usage` starts at 0).
+  tokenBaseline?: { input: number; output: number };
   onExit: (code: number) => void;
 }
 
@@ -87,7 +92,11 @@ export const formatToolBrief = (name: string, input: any, wt: string): string | 
   }
 };
 
-const parseStreamEvent = (raw: any, agent: Agent): void => {
+const parseStreamEvent = (
+  raw: any,
+  agent: Agent,
+  baseline: { input: number; output: number },
+): void => {
   if (!raw || typeof raw !== "object") return;
   const type = raw.type;
   const agentId = agent.id;
@@ -122,8 +131,8 @@ const parseStreamEvent = (raw: any, agent: Agent): void => {
       append(agentId, {
         ts: now(),
         kind: "usage",
-        inputTokens: Number(usage.input_tokens) || 0,
-        outputTokens: Number(usage.output_tokens) || 0,
+        inputTokens: baseline.input + (Number(usage.input_tokens) || 0),
+        outputTokens: baseline.output + (Number(usage.output_tokens) || 0),
       });
     }
     return;
@@ -135,8 +144,8 @@ const parseStreamEvent = (raw: any, agent: Agent): void => {
       append(agentId, {
         ts: now(),
         kind: "usage",
-        inputTokens: Number(usage.input_tokens) || 0,
-        outputTokens: Number(usage.output_tokens) || 0,
+        inputTokens: baseline.input + (Number(usage.input_tokens) || 0),
+        outputTokens: baseline.output + (Number(usage.output_tokens) || 0),
       });
     }
     append(agentId, {
@@ -158,8 +167,10 @@ export const spawnAgent = (opts: SpawnOpts): void => {
     allowedTools,
     disallowedTools,
     settingsPath,
+    tokenBaseline,
     onExit,
   } = opts;
+  const baseline = tokenBaseline ?? { input: 0, output: 0 };
   const args = [
     "-p",
     prompt,
@@ -205,7 +216,7 @@ export const spawnAgent = (opts: SpawnOpts): void => {
       if (!line) continue;
       try {
         const ev = JSON.parse(line);
-        parseStreamEvent(ev, agent);
+        parseStreamEvent(ev, agent, baseline);
       } catch {
         append(agent.id, { ts: now(), kind: "text", text: line.slice(0, 200) });
       }

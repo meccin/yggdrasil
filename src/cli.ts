@@ -10,11 +10,19 @@ import {
   resolvePermissionMode,
 } from "./config";
 import { detectRemote, repoNameFromPath } from "./sources";
-import { ensureUserDirs, userDir, configFile } from "./paths";
+import { ensureUserDirs, userDir, configFile, profileFile, profilesDir } from "./paths";
 import { aggregate, formatReport, readMetrics } from "./metrics";
 import type { Provider, RepoConfig } from "./types";
+import {
+  deleteProfile,
+  listProfiles,
+  loadProfile,
+  saveProfile,
+  scaffoldHarness,
+  scaffoldOpenspec,
+} from "./profile";
 
-const VERSION = "0.8.0";
+const VERSION = "1.0.0";
 
 const printHelp = (): void => {
   console.log(`Yggdrasil ${VERSION} — TUI multi-agent dashboard
@@ -34,6 +42,7 @@ Usage:
                                        --allow-tool TOOL        (repeatable; replaces allowlist)
                                        --disallow-tool TOOL     (repeatable; replaces denylist)
                                        --settings PATH|none     (claude settings JSON)
+                                       --profile NAME|none|reset (pipeline profile)
                                        --reset-tools            (clear repo override → inherit global)
   ygg repo rm <name>                 remove repo by name
   ygg config show                    print global defaults
@@ -43,6 +52,13 @@ Usage:
                                        --permission-mode MODE
                                        --default-mode mr|review|dry
                                        --notifications on|off
+                                       --profile NAME|none      (default pipeline)
+  ygg profile list                   list available profiles in ~/.yggdrasil/profiles
+  ygg profile show <name>            print a profile's parsed contents
+  ygg profile init <name> [opts]     scaffold a profile file
+                                       --template harness|openspec|blank
+  ygg profile rm <name>              delete a profile file
+  ygg profile path <name>            print the on-disk path (use with $EDITOR)
   ygg metrics [opts]                 show usage metrics
                                        --repo NAME
                                        --since YYYY-MM-DD
@@ -140,7 +156,161 @@ const cmdDoctor = (): number => {
     }
   }
 
+  // Validate every referenced profile (global + per-repo). Missing file or
+  // bad JSON fails doctor; parse errors quote the validator message.
+  const profileRefs: Array<{ source: string; name: string }> = [];
+  if (cfg.profile) profileRefs.push({ source: "global", name: cfg.profile });
+  for (const r of cfg.repos) {
+    if (r.profile) profileRefs.push({ source: r.name, name: r.profile });
+  }
+  for (const ref of profileRefs) {
+    const path = profileFile(ref.name);
+    if (!existsSync(path)) {
+      check(`profile (${ref.source}): ${ref.name}`, false, `not found at ${path}`);
+      continue;
+    }
+    let parsed = true;
+    let parseErr = "";
+    try {
+      loadProfile(ref.name);
+    } catch (err) {
+      parsed = false;
+      parseErr = (err as Error).message;
+    }
+    check(`profile (${ref.source}): ${ref.name}`, parsed, parseErr);
+  }
+
   return ok ? 0 : 1;
+};
+
+const cmdProfileList = (): number => {
+  ensureUserDirs();
+  const names = listProfiles();
+  if (names.length === 0) {
+    console.log(`(no profiles in ${profilesDir()})`);
+    console.log("hint: ygg profile init <name> --template harness");
+    return 0;
+  }
+  const cfg = loadConfig();
+  for (const name of names) {
+    const refs: string[] = [];
+    if (cfg.profile === name) refs.push("global");
+    for (const r of cfg.repos) if (r.profile === name) refs.push(r.name);
+    const tag = refs.length ? `  · used by: ${refs.join(", ")}` : "";
+    console.log(`- ${name}${tag}`);
+  }
+  return 0;
+};
+
+const cmdProfileShow = (args: string[]): number => {
+  const name = args[0];
+  if (!name) {
+    console.error("usage: ygg profile show <name>");
+    return 1;
+  }
+  let profile;
+  try {
+    profile = loadProfile(name);
+  } catch (err) {
+    console.error((err as Error).message);
+    return 1;
+  }
+  if (!profile) {
+    console.error(`profile not found: ${name} (expected ${profileFile(name)})`);
+    return 1;
+  }
+  console.log(`profile: ${profile.name}  (${profileFile(name)})`);
+  profile.steps.forEach((s, i) => {
+    console.log(`  [${i + 1}/${profile!.steps.length}] ${s.name} → ${s.command}`);
+    if (s.permissionMode) console.log(`        permissionMode: ${s.permissionMode}`);
+    if (s.allowedTools) console.log(`        allow: ${s.allowedTools.join(", ") || "(none)"}`);
+    if (s.disallowedTools) console.log(`        deny:  ${s.disallowedTools.join(", ") || "(none)"}`);
+    if (s.args) {
+      const preview = s.args.length > 200 ? s.args.slice(0, 200) + "…" : s.args;
+      console.log(`        args: ${preview.replace(/\n/g, "\\n")}`);
+    }
+  });
+  return 0;
+};
+
+const cmdProfileInit = (rawArgs: string[]): number => {
+  const args = [...rawArgs];
+  const pop = (flag: string): string | undefined => {
+    const idx = args.indexOf(flag);
+    if (idx >= 0) {
+      const v = args[idx + 1];
+      args.splice(idx, 2);
+      return v;
+    }
+    return undefined;
+  };
+  const template = pop("--template") || "harness";
+  const name = args[0];
+  if (!name) {
+    console.error("usage: ygg profile init <name> [--template harness|openspec|blank]");
+    return 1;
+  }
+  ensureUserDirs();
+  if (existsSync(profileFile(name))) {
+    console.error(`profile already exists: ${profileFile(name)}`);
+    return 1;
+  }
+  let profile;
+  if (template === "harness") profile = scaffoldHarness(name);
+  else if (template === "openspec") profile = scaffoldOpenspec(name);
+  else if (template === "blank") {
+    profile = {
+      name,
+      steps: [
+        {
+          name: "step1",
+          command: "/your-slash-command",
+          args: "Context for issue #{{issue.id}}: {{issue.title}}\n\n{{issue.body}}",
+        },
+      ],
+    };
+  } else {
+    console.error(`invalid --template: ${template} (expected harness|openspec|blank)`);
+    return 1;
+  }
+  saveProfile(profile);
+  console.log(`✓ profile created: ${profileFile(name)}`);
+  console.log("edit with: $EDITOR " + profileFile(name));
+  console.log(`use with: ygg config set --profile ${name}    (or ygg repo set <repo> --profile ${name})`);
+  return 0;
+};
+
+const cmdProfileRm = (args: string[]): number => {
+  const name = args[0];
+  if (!name) {
+    console.error("usage: ygg profile rm <name>");
+    return 1;
+  }
+  const cfg = loadConfig();
+  const refs: string[] = [];
+  if (cfg.profile === name) refs.push("global");
+  for (const r of cfg.repos) if (r.profile === name) refs.push(r.name);
+  if (refs.length > 0) {
+    console.error(`profile ${name} is referenced by: ${refs.join(", ")}`);
+    console.error("clear those references first (e.g. `ygg config set --profile none`)");
+    return 1;
+  }
+  if (!deleteProfile(name)) {
+    console.error(`profile not found: ${name}`);
+    return 1;
+  }
+  console.log(`✓ profile removed: ${name}`);
+  return 0;
+};
+
+const cmdProfilePath = (args: string[]): number => {
+  const name = args[0];
+  if (!name) {
+    console.error("usage: ygg profile path <name>");
+    return 1;
+  }
+  console.log(profileFile(name));
+  return 0;
 };
 
 const cmdRepoAdd = (rawArgs: string[]): number => {
@@ -216,6 +386,7 @@ const cmdRepoAdd = (rawArgs: string[]): number => {
     allowedTools: existing?.allowedTools ?? null,
     disallowedTools: existing?.disallowedTools ?? null,
     settingsPath: existing?.settingsPath ?? null,
+    profile: existing?.profile ?? null,
   };
   saveConfig(upsertRepo(cfg, repo));
   const claudeNote = repo.claudeConfigDir ? ` · claude:${repo.claudeConfigDir}` : "";
@@ -236,6 +407,8 @@ const cmdRepoList = (): number => {
     const allowList = (r.allowedTools ?? cfg.allowedTools).join(", ") || "(none)";
     const denyList = (r.disallowedTools ?? cfg.disallowedTools).join(", ") || "(none)";
     const settingsVal = (r.settingsPath ?? cfg.settingsPath) || "(none)";
+    const profileSrc = r.profile === null ? " (global)" : "";
+    const profileVal = (r.profile ?? cfg.profile) || "(none)";
     console.log(`- ${r.name}`);
     console.log(`    path:     ${r.path}`);
     console.log(`    provider: ${r.provider}`);
@@ -247,6 +420,7 @@ const cmdRepoList = (): number => {
     console.log(`    allow:    ${allowList}${allowSrc}`);
     console.log(`    deny:     ${denyList}${denySrc}`);
     console.log(`    settings: ${settingsVal}${settingsSrc}`);
+    console.log(`    profile:  ${profileVal}${profileSrc}`);
   }
   return 0;
 };
@@ -354,6 +528,21 @@ const cmdRepoSet = (rawArgs: string[]): number => {
     }
   }
 
+  const profileArg = pop("--profile");
+  if (profileArg !== undefined) {
+    if (profileArg === "none" || profileArg === "reset" || profileArg === "") {
+      next.profile = null;
+    } else {
+      if (!existsSync(profileFile(profileArg))) {
+        console.error(
+          `--profile not found: ${profileArg} (expected ${profileFile(profileArg)})`,
+        );
+        return 1;
+      }
+      next.profile = profileArg;
+    }
+  }
+
   saveConfig(upsertRepo(cfg, next));
   console.log(`✓ repo updated: ${name}`);
   return 0;
@@ -370,6 +559,7 @@ const cmdConfigShow = (): number => {
   console.log(`  disallowedTools:  ${cfg.disallowedTools.join(", ") || "(none)"}`);
   console.log(`  settingsPath:     ${cfg.settingsPath || "(none)"}`);
   console.log(`  notifications:    ${cfg.notifications ? "on" : "off"}`);
+  console.log(`  profile:          ${cfg.profile || "(none)"}`);
   console.log(`  repos:            ${cfg.repos.length}`);
   return 0;
 };
@@ -450,6 +640,23 @@ const cmdConfigSet = (rawArgs: string[]): number => {
       return 1;
     }
     changes.push(`notifications=${next.notifications ? "on" : "off"}`);
+  }
+
+  const profileArg = pop("--profile");
+  if (profileArg !== undefined) {
+    if (profileArg === "none" || profileArg === "") {
+      next.profile = null;
+      changes.push(`profile=(none)`);
+    } else {
+      if (!existsSync(profileFile(profileArg))) {
+        console.error(
+          `--profile not found: ${profileArg} (expected ${profileFile(profileArg)})`,
+        );
+        return 1;
+      }
+      next.profile = profileArg;
+      changes.push(`profile=${profileArg}`);
+    }
   }
 
   if (changes.length === 0) {
@@ -551,6 +758,17 @@ export const main = async (argv: string[]): Promise<number> => {
     if (sub === "show" || sub === "ls" || sub === undefined) return cmdConfigShow();
     if (sub === "set") return cmdConfigSet(subArgs);
     console.error("usage: ygg config <show|set>");
+    return 1;
+  }
+  if (cmd === "profile") {
+    const sub = rest[0];
+    const subArgs = rest.slice(1);
+    if (sub === "list" || sub === "ls" || sub === undefined) return cmdProfileList();
+    if (sub === "show") return cmdProfileShow(subArgs);
+    if (sub === "init") return cmdProfileInit(subArgs);
+    if (sub === "rm" || sub === "remove") return cmdProfileRm(subArgs);
+    if (sub === "path") return cmdProfilePath(subArgs);
+    console.error("usage: ygg profile <list|show|init|rm|path>");
     return 1;
   }
   console.error(`unknown command: ${cmd}`);

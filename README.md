@@ -56,6 +56,7 @@ ygg repo set <name> [opts]           # edit fields on an existing repo
     --allow-tool TOOL                # repeatable; replaces repo allowlist
     --disallow-tool TOOL             # repeatable; replaces repo denylist
     --settings PATH|none             # path to a Claude Code settings JSON
+    --profile NAME|none|reset        # pipeline profile (see "Profiles" below)
     --reset-tools                    # clear repo allow/deny → inherit global
 ygg repo list
 ygg repo rm <name>
@@ -65,6 +66,14 @@ ygg config set [opts]                # edit global defaults
     --max-concurrent N               # 1..10
     --permission-mode MODE
     --default-mode mr|review|dry
+    --notifications on|off
+    --profile NAME|none              # default pipeline for every repo
+ygg profile list                     # profiles in ~/.yggdrasil/profiles/
+ygg profile show <name>              # print parsed contents
+ygg profile init <name> [opts]       # scaffold a new profile
+    --template harness|openspec|blank
+ygg profile rm <name>                # delete a profile file
+ygg profile path <name>              # print on-disk path (pair with $EDITOR)
 ygg metrics [opts]                   # show usage metrics
     --repo NAME
     --since YYYY-MM-DD
@@ -98,6 +107,7 @@ restart `ygg`. Shape:
   "allowedTools": ["Read", "Write", "Edit", "Glob", "Grep", "Bash"],
   "disallowedTools": [],
   "settingsPath": null,                  // global claude --settings path
+  "profile": null,                       // global pipeline profile (see "Profiles")
   "repos": [
     {
       "name": "owner/project",
@@ -111,7 +121,8 @@ restart `ygg`. Shape:
       "claudeConfigDir": null,           // null = ~/.claude
       "allowedTools": null,              // null = inherit global; array overrides
       "disallowedTools": null,
-      "settingsPath": null
+      "settingsPath": null,
+      "profile": null                    // null = inherit global; string = override
     }
   ]
 }
@@ -127,6 +138,7 @@ User data (created on first run):
 ├── state.json              # agents persisted between runs
 ├── metrics.ndjson          # usage events (append-only, rotates at 5MB)
 ├── metrics.ndjson.1..5     # rotated archives, oldest dropped first
+├── profiles/<name>.json    # pipeline profiles (optional; see "Profiles")
 ├── wt/<repo>/issue-<id>/   # worktrees
 └── logs/<agent>.ndjson     # raw stream-json output, per agent (oldest pruned beyond 200)
 ```
@@ -318,6 +330,136 @@ Backend: `osascript` on macOS, `notify-send` on Linux, silent no-op on
 Windows or when the helper binary isn't installed. Failures inside the
 notifier are swallowed — they never crash the parent TUI.
 
+## Profiles (pipelines)
+
+By default each agent runs **one** `claude -p` invocation per issue. For workflows that
+split planning, implementing, and evaluating into discrete phases (Sleipnir/harness,
+OpenSpec, etc.), Yggdrasil can drive a **linear pipeline** of slash-commands instead —
+configured via a *profile*.
+
+A profile is a JSON file in `~/.yggdrasil/profiles/<name>.json` describing the ordered
+steps. Each step is one `claude -p "<command> <args>"` call inside the same worktree as
+its neighbors, so artifacts produced by step N (plan files, generated tests, etc.) are
+available to step N+1. If any step exits non-zero the agent is marked `failed` and the
+remaining steps are skipped. The standard `push + MR/PR + comment` finalize runs once
+after the last step succeeds.
+
+**Profiles are opt-in.** When neither the global config nor a repo references one,
+agents keep running the classic single-prompt flow byte-for-byte.
+
+### Scaffolding
+
+```bash
+ygg profile init my-flow --template harness     # /harness-plan → /harness-implement → /harness-evaluate
+ygg profile init my-flow --template openspec    # /opsx:propose → /opsx:apply → /opsx:verify
+ygg profile init my-flow --template blank       # one empty step
+```
+
+The scaffold writes `~/.yggdrasil/profiles/my-flow.json`. Edit it directly:
+
+```bash
+$EDITOR $(ygg profile path my-flow)
+```
+
+### Wiring it up
+
+```bash
+ygg config set --profile my-flow            # default for every repo
+ygg repo set owner/proj --profile other     # per-repo override
+ygg repo set owner/proj --profile none      # explicit "no pipeline" (overrides global)
+ygg repo set owner/proj --profile reset     # inherit global again
+```
+
+`ygg profile list` annotates each profile with the configs that reference it. `ygg
+doctor` validates that every referenced profile exists and parses.
+
+### Schema
+
+```jsonc
+{
+  "name": "harness",
+  "steps": [
+    {
+      "name": "plan",                              // display only
+      "command": "/harness-plan",                  // slash-command (must exist in your claude install)
+      "args": "Issue #{{issue.id}}: {{issue.title}}\n\n{{issue.body}}",
+      "permissionMode": "plan"                     // optional per-step override
+    },
+    {
+      "name": "implement",
+      "command": "/harness-implement",
+      "args": "Implement plan for issue #{{issue.id}}.",
+      "permissionMode": "acceptEdits"
+    },
+    {
+      "name": "evaluate",
+      "command": "/harness-evaluate",
+      "args": "Run sensors and review. Do not push — supervisor handles that."
+    }
+  ]
+}
+```
+
+Each step also accepts optional `allowedTools` / `disallowedTools` (arrays). Cascade
+for permission mode and tools: `step.X ?? repo.X ?? global.X`.
+
+#### Template variables (in `args`)
+
+| Variable               | Value                                       |
+|------------------------|---------------------------------------------|
+| `{{issue.id}}`         | issue iid                                   |
+| `{{issue.title}}`      | issue title                                 |
+| `{{issue.body}}`       | issue description (truncated at 50KB)       |
+| `{{branch}}`           | agent's working branch                      |
+| `{{worktree}}`         | agent's worktree absolute path              |
+| `{{repo.name}}`        | local repo name                             |
+| `{{repo.remoteRepo}}`  | GitLab/GitHub slug                          |
+| `{{step.name}}`        | current step's `name`                       |
+
+Unknown keys collapse to empty string. Whitespace inside `{{ ... }}` is tolerated.
+Literal `{{` cannot be escaped in v1.0.0 — write that elsewhere if you need it raw.
+
+### Loops & retries
+
+Yggdrasil **does not loop steps in v1.0.0**. If your final step needs to retry on
+sensor failure, that retry must happen *inside* that slash-command — Sleipnir's full-
+auto mode already does this. Yggdrasil-driven retry loops are tracked for post-v1.0.0.
+
+### TUI
+
+While a profile is active, the agent card shows `[N/M]` next to its status. A
+`system` log line like `step 2/3: implement` marks each boundary so the timeline in
+the log pane is auditable.
+
+### Re-spawn (`R`)
+
+Re-spawning a failed agent with a profile **restarts from step 1**, reusing the
+worktree (so any commits made by earlier steps are preserved on the branch). Step
+state is not resumed mid-pipeline.
+
+### Gotchas
+
+- **Don't `git push` from inside a step.** Yggdrasil owns the push + MR/PR + comment
+  step. The shipped scaffolds tell the last step "do not push — the supervisor handles
+  that"; keep that line (or its equivalent) when you edit. Uncommitted leftovers are
+  handled automatically (see below); pushing manually breaks the flow.
+- **Leftover artifacts are auto-committed before push.** External slash-commands often
+  write files (specs, evaluation reports, etc.) without committing them. In `mr` mode,
+  if the last step exits cleanly but the worktree is still dirty, Yggdrasil runs
+  `git add -A && git commit -m "chore: agent artifacts for #N"` before pushing — so
+  the MR always lands. The auto-commit runs only after a successful final step; it
+  never tries to ship a partial pipeline.
+- **Slash-command must exist in your `claude` install.** Profiles dispatch via
+  `claude -p "<command> ..."`; a typo or a missing plugin yields `claude exit ≠ 0` and
+  the agent fails on that step. `ygg doctor` cannot verify slash-commands are
+  installed — only that the profile file parses.
+- **Token counters carry across steps.** Each `claude -p` is a fresh session whose
+  token usage starts at zero; Yggdrasil sums them so the agent card and metrics show
+  the cumulative total.
+- **Missing profile is fatal at spawn.** If `config.json` references a profile name but
+  the file vanishes, the agent fails loud (no silent fallback to single-shot). Fix it
+  with `ygg doctor` + `ygg config set --profile none` (or restore the file).
+
 ## Re-spawning failed agents
 
 When `claude -p` exits non-zero (network blip, transient gate, etc.) the
@@ -450,8 +592,8 @@ bun test
 ```
 
 Covers pure functions: config resolution, tool-brief formatter, summary
-extraction, remote-URL parsing, metrics aggregation, retry heuristic, and
-file/directory rotation.
+extraction, remote-URL parsing, metrics aggregation, retry heuristic,
+file/directory rotation, and profile template interpolation + validation.
 
 ## Known limitations
 

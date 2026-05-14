@@ -1,6 +1,6 @@
 import type { Agent, AgentEvent, FinalizeMode, RepoConfig, Provider } from "../types";
 import { store } from "../store";
-import { hasAnyCommits, hasUncommittedChanges, pushBranch } from "../git";
+import { hasAnyCommits, hasUncommittedChanges, pushBranch, runGit } from "../git";
 import { getSource } from "../sources";
 
 const now = () => Date.now();
@@ -27,11 +27,31 @@ export const finalize = async (
   }
 
   // mode === "mr"
+  // Agent ran to completion (we only enter finalize on a successful exit).
+  // Anything still dirty is work the agent produced and intends to ship but
+  // forgot to commit — common with external slash-commands (e.g. Sleipnir's
+  // /harness-evaluate writes spec artifacts without committing). Yggdrasil
+  // owns the commit + MR step, so stage and commit any leftovers ourselves.
   if (hasUncommittedChanges(agent.worktreePath)) {
-    log(agent.id, "finalize: uncommitted changes — abort");
-    upd.updateAgent(agent.id, { errorMessage: "uncommitted changes" });
-    upd.setStatus(agent.id, "failed");
-    return;
+    log(agent.id, "finalize: dirty worktree — auto-committing artifacts");
+    const add = runGit(["add", "-A"], agent.worktreePath);
+    if (!add.ok) {
+      const err = add.stderr.slice(0, 200);
+      log(agent.id, `finalize: git add failed: ${err}`);
+      upd.updateAgent(agent.id, { errorMessage: `git add failed: ${err}` });
+      upd.setStatus(agent.id, "failed");
+      return;
+    }
+    const msg = `chore: agent artifacts for #${agent.issueId}`;
+    const commit = runGit(["commit", "-m", msg], agent.worktreePath);
+    if (!commit.ok) {
+      const err = commit.stderr.slice(0, 200);
+      log(agent.id, `finalize: auto-commit failed: ${err}`);
+      upd.updateAgent(agent.id, { errorMessage: `auto-commit failed: ${err}` });
+      upd.setStatus(agent.id, "failed");
+      return;
+    }
+    log(agent.id, `finalize: auto-committed (${msg})`);
   }
 
   if (!hasAnyCommits(agent.worktreePath, agent.branch)) {

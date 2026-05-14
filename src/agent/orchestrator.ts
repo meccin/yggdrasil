@@ -7,6 +7,8 @@ import {
   resolveAllowedTools,
   resolveDisallowedTools,
   resolvePermissionMode,
+  resolveProfile,
+  resolveProfileName,
   resolveSettingsPath,
 } from "../config";
 import { addWorktree, isValidWorktree, removeWorktree } from "./worktree";
@@ -15,6 +17,7 @@ import { finalize } from "./finalize";
 import { getSource } from "../sources";
 import { recordMetric } from "../metrics";
 import { notify } from "../notify";
+import { interpolate, type Profile, type ProfileStep } from "../profile";
 
 const maybeNotify = (
   repo: RepoConfig,
@@ -29,11 +32,47 @@ const maybeNotify = (
 
 const now = () => Date.now();
 
-// Wraps the spawn + onExit lifecycle so both the initial spawn and `respawn`
-// reuse the same Claude/permission/tool resolution and finalize/error
-// transitions. Pulls `state.config` fresh so per-repo overrides edited
-// between runs are picked up on the next launch.
-const launchClaude = (
+const finishMetric = (
+  agent: Agent,
+  repo: RepoConfig,
+  status: Agent["status"],
+  error?: string,
+): void => {
+  const cur = store.getState().agents[agent.id];
+  recordMetric({
+    ts: now(),
+    kind: "agent_end",
+    agentId: agent.id,
+    repo: repo.name,
+    issueId: agent.issueId,
+    status,
+    durationMs: Date.now() - agent.startedAt,
+    inputTokens: cur?.inputTokens || 0,
+    outputTokens: cur?.outputTokens || 0,
+    mrUrl: cur?.mrUrl,
+    error,
+  });
+};
+
+const log = (id: string, text: string): void => {
+  store.getState().appendEvent(id, { ts: now(), kind: "system", text });
+};
+
+const buildVars = (agent: Agent, issue: Issue, repo: RepoConfig, step: ProfileStep) => ({
+  issue: {
+    id: issue.iid,
+    title: issue.title,
+    body: issue.description || "",
+  },
+  branch: agent.branch,
+  worktree: agent.worktreePath,
+  repo: { name: repo.name, remoteRepo: repo.remoteRepo },
+  step: { name: step.name },
+});
+
+// Classic single-shot path: one spawn, finalize on exit. Used when neither
+// global nor repo references a profile.
+const launchSingleShot = (
   agent: Agent,
   repo: RepoConfig,
   mode: FinalizeMode,
@@ -56,30 +95,15 @@ const launchClaude = (
     onExit: async (code) => {
       const cur = store.getState().agents[agent.id];
       if (!cur) return;
-      const finishMetric = (status: typeof cur.status, error?: string) => {
-        recordMetric({
-          ts: now(),
-          kind: "agent_end",
-          agentId: agent.id,
-          repo: repo.name,
-          issueId: agent.issueId,
-          status,
-          durationMs: Date.now() - agent.startedAt,
-          inputTokens: store.getState().agents[agent.id]?.inputTokens || 0,
-          outputTokens: store.getState().agents[agent.id]?.outputTokens || 0,
-          mrUrl: store.getState().agents[agent.id]?.mrUrl,
-          error,
-        });
-      };
       if (cur.status === "killed") {
-        finishMetric("killed");
+        finishMetric(agent, repo, "killed");
         maybeNotify(repo, agent, "killed");
         return;
       }
       if (code !== 0) {
         store.getState().updateAgent(agent.id, { errorMessage: `claude exit ${code}` });
         store.getState().setStatus(agent.id, "failed");
-        finishMetric("failed", `claude exit ${code}`);
+        finishMetric(agent, repo, "failed", `claude exit ${code}`);
         maybeNotify(repo, agent, "failed");
         return;
       }
@@ -87,16 +111,161 @@ const launchClaude = (
         await finalize(cur, repo, mode);
         const final = store.getState().agents[agent.id];
         const status = final?.status || "done";
-        finishMetric(status, final?.errorMessage);
+        finishMetric(agent, repo, status, final?.errorMessage);
         maybeNotify(repo, agent, status);
       } catch (err) {
         store.getState().updateAgent(agent.id, { errorMessage: (err as Error).message });
         store.getState().setStatus(agent.id, "failed");
-        finishMetric("failed", (err as Error).message);
+        finishMetric(agent, repo, "failed", (err as Error).message);
         maybeNotify(repo, agent, "failed");
       }
     },
   });
+};
+
+// Multi-step pipeline path. Walks `profile.steps` sequentially, spawning a
+// fresh `claude -p` for each. Each step's prompt = `${command} ${args}` after
+// {{var}} interpolation. Token counters carry across steps via the
+// runner's tokenBaseline option so the agent card shows cumulative totals.
+const launchPipeline = (
+  agent: Agent,
+  repo: RepoConfig,
+  mode: FinalizeMode,
+  issue: Issue,
+  profile: Profile,
+): void => {
+  const total = profile.steps.length;
+  store.getState().updateAgent(agent.id, { currentStep: 0, totalSteps: total });
+
+  const runStep = (idx: number): void => {
+    // Status may have flipped to `killed` between steps via the TUI. Re-read
+    // the live agent and bail before spawning if so.
+    const live = store.getState().agents[agent.id];
+    if (!live) return;
+    if (live.status === "killed" || live.status === "failed") {
+      finishMetric(agent, repo, live.status, live.errorMessage);
+      maybeNotify(repo, agent, live.status);
+      return;
+    }
+
+    const step = profile.steps[idx];
+    log(agent.id, `step ${idx + 1}/${total}: ${step.name}`);
+    store.getState().updateAgent(agent.id, { currentStep: idx });
+
+    const vars = buildVars(live, issue, repo, step);
+    const argsInterpolated = interpolate(step.args, vars);
+    const prompt = argsInterpolated
+      ? `${step.command} ${argsInterpolated}`
+      : step.command;
+
+    const cfg = store.getState().config;
+    const permissionMode =
+      step.permissionMode || resolvePermissionMode(cfg, repo);
+    const allowedTools =
+      step.allowedTools ?? resolveAllowedTools(cfg, repo);
+    const disallowedTools =
+      step.disallowedTools ?? resolveDisallowedTools(cfg, repo);
+    const settingsPath = resolveSettingsPath(cfg, repo);
+
+    const baseline = {
+      input: live.inputTokens || 0,
+      output: live.outputTokens || 0,
+    };
+
+    spawnAgent({
+      agent: live,
+      prompt,
+      permissionMode,
+      claudeConfigDir: repo.claudeConfigDir,
+      allowedTools,
+      disallowedTools,
+      settingsPath,
+      tokenBaseline: baseline,
+      onExit: async (code) => {
+        const cur = store.getState().agents[agent.id];
+        if (!cur) return;
+        if (cur.status === "killed") {
+          finishMetric(agent, repo, "killed");
+          maybeNotify(repo, agent, "killed");
+          return;
+        }
+        if (code !== 0) {
+          const msg = `step ${idx + 1}/${total} (${step.name}) failed: claude exit ${code}`;
+          log(agent.id, msg);
+          store.getState().updateAgent(agent.id, { errorMessage: msg });
+          store.getState().setStatus(agent.id, "failed");
+          finishMetric(agent, repo, "failed", msg);
+          maybeNotify(repo, agent, "failed");
+          return;
+        }
+        if (idx + 1 < total) {
+          runStep(idx + 1);
+          return;
+        }
+        // Last step succeeded → finalize once (push + MR/PR + comment).
+        try {
+          await finalize(cur, repo, mode);
+          const final = store.getState().agents[agent.id];
+          const status = final?.status || "done";
+          finishMetric(agent, repo, status, final?.errorMessage);
+          maybeNotify(repo, agent, status);
+        } catch (err) {
+          store.getState().updateAgent(agent.id, { errorMessage: (err as Error).message });
+          store.getState().setStatus(agent.id, "failed");
+          finishMetric(agent, repo, "failed", (err as Error).message);
+          maybeNotify(repo, agent, "failed");
+        }
+      },
+    });
+  };
+
+  runStep(0);
+};
+
+// Single entry point used by both initial spawn and respawn. Resolves the
+// profile fresh from disk on every launch so edits made between runs are
+// picked up. A validation error throws and surfaces to the caller.
+const launchAgent = (
+  agent: Agent,
+  repo: RepoConfig,
+  mode: FinalizeMode,
+  issue: Issue,
+): void => {
+  const cfg = store.getState().config;
+  const requestedName = resolveProfileName(cfg, repo);
+  let profile: Profile | null = null;
+  try {
+    profile = resolveProfile(cfg, repo);
+  } catch (err) {
+    const msg = `profile load failed: ${(err as Error).message}`;
+    log(agent.id, msg);
+    store.getState().updateAgent(agent.id, { errorMessage: msg });
+    store.getState().setStatus(agent.id, "failed");
+    finishMetric(agent, repo, "failed", msg);
+    maybeNotify(repo, agent, "failed");
+    return;
+  }
+
+  // A name is configured but the file vanished. Fail loud — falling back to
+  // classic single-shot here would silently violate the user's intent.
+  if (requestedName && !profile) {
+    const msg = `profile "${requestedName}" referenced but file is missing — run \`ygg doctor\` and reset with \`ygg config set --profile none\` (or restore the file)`;
+    log(agent.id, msg);
+    store.getState().updateAgent(agent.id, { errorMessage: msg });
+    store.getState().setStatus(agent.id, "failed");
+    finishMetric(agent, repo, "failed", msg);
+    maybeNotify(repo, agent, "failed");
+    return;
+  }
+
+  if (!profile) {
+    const prompt = buildPrompt(issue.title, issue.description || "", issue.iid);
+    launchSingleShot(agent, repo, mode, prompt);
+    return;
+  }
+
+  log(agent.id, `profile: ${profile.name} (${profile.steps.length} steps)`);
+  launchPipeline(agent, repo, mode, issue, profile);
 };
 
 export const spawnAgentForIssue = async (
@@ -152,8 +321,7 @@ export const spawnAgentForIssue = async (
     mode,
   });
 
-  const prompt = buildPrompt(issue.title, issue.description || "", issue.iid);
-  launchClaude(agent, repo, mode, prompt);
+  launchAgent(agent, repo, mode, issue);
 
   return { ok: true, agentId: id };
 };
@@ -162,7 +330,7 @@ export const spawnAgentForIssue = async (
 // branch, or accumulated commits. The agent record is mutated in place
 // (same id) so the user keeps the agent card and log history; new run is
 // distinguishable via a `system: respawn` log line and a fresh agent_start
-// metric event.
+// metric event. Profile pipelines restart from step 0.
 export const respawnFailedAgent = async (
   id: string,
 ): Promise<{ ok: boolean; error?: string }> => {
@@ -192,8 +360,6 @@ export const respawnFailedAgent = async (
   const repo = s.config.repos.find((r) => r.name === agent.repoName);
   if (!repo) return { ok: false, error: "repo no longer configured" };
 
-  // Reuse worktree+branch when intact; rebuild when the directory was wiped
-  // (e.g. a manual `git worktree remove` outside the TUI between runs).
   if (!existsSync(agent.worktreePath) || !isValidWorktree(agent.worktreePath)) {
     try {
       const wt = addWorktree(repo.name, repo.path, agent.issueId);
@@ -204,8 +370,6 @@ export const respawnFailedAgent = async (
     }
   }
 
-  // Pull the latest issue body so edits made on the GitLab/GitHub side after
-  // the initial run reach the re-spawned agent.
   const refreshed = (() => {
     try {
       return getSource(repo.provider).view(repo.remoteRepo, agent.issueId);
@@ -229,6 +393,8 @@ export const respawnFailedAgent = async (
     outputTokens: 0,
     currentTool: undefined,
     lastText: undefined,
+    currentStep: undefined,
+    totalSteps: undefined,
     startedAt: now(),
   });
   s.appendEvent(id, respawnEvent);
@@ -245,8 +411,15 @@ export const respawnFailedAgent = async (
   const live = store.getState().agents[id];
   if (!live) return { ok: false, error: "agent vanished after reset" };
 
-  const prompt = buildPrompt(issueTitle, issueBody, agent.issueId);
-  launchClaude(live, repo, agent.mode, prompt);
+  const issue: Issue = {
+    iid: agent.issueId,
+    title: issueTitle,
+    description: issueBody,
+    labels: refreshed?.labels || [],
+    state: refreshed?.state || "opened",
+    web_url: refreshed?.web_url,
+  };
+  launchAgent(live, repo, agent.mode, issue);
 
   return { ok: true };
 };

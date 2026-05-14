@@ -41,7 +41,12 @@ const Card: React.FC<{ a: Agent; selected: boolean }> = ({ a, selected }) => (
   >
     <Box justifyContent="space-between">
       <Text bold wrap="truncate-end">#{a.issueId} {truncate(a.issueTitle, 28)}</Text>
-      <Text color={colorFor(a.status)}>{a.status}</Text>
+      <Text color={colorFor(a.status)}>
+        {a.status}
+        {a.totalSteps && a.currentStep != null
+          ? ` [${a.currentStep + 1}/${a.totalSteps}]`
+          : ""}
+      </Text>
     </Box>
     <Box>
       <Text dimColor>{a.repoName}</Text>

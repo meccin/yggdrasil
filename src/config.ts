@@ -3,6 +3,7 @@ import { configFile, ensureUserDirs } from "./paths";
 import type { GlobalConfig, RepoConfig, PermissionMode, FinalizeMode } from "./types";
 import type { Provider } from "./sources/types";
 import { detectRemote } from "./sources";
+import { loadProfile, type Profile } from "./profile";
 
 // Default tools a fresh-installed Yggdrasil will allow on every spawn unless
 // the repo overrides it. Picked to cover the typical coding-agent flow
@@ -19,6 +20,7 @@ const DEFAULT_CONFIG: GlobalConfig = {
   disallowedTools: [],
   settingsPath: null,
   notifications: true,
+  profile: null,
   repos: [],
 };
 
@@ -78,6 +80,7 @@ const validateConfig = (raw: any): GlobalConfig => {
   cfg.settingsPath = cfg.settingsPath ? String(cfg.settingsPath) : null;
   cfg.notifications =
     typeof cfg.notifications === "boolean" ? cfg.notifications : true;
+  cfg.profile = cfg.profile ? String(cfg.profile) : null;
   cfg.repos = cfg.repos.map(normalizeRepo);
   return cfg;
 };
@@ -101,6 +104,7 @@ const normalizeRepo = (r: any): RepoConfig => {
     allowedTools: Array.isArray(r.allowedTools) ? r.allowedTools.map(String) : null,
     disallowedTools: Array.isArray(r.disallowedTools) ? r.disallowedTools.map(String) : null,
     settingsPath: r.settingsPath ? String(r.settingsPath) : null,
+    profile: r.profile ? String(r.profile) : null,
   };
 };
 
@@ -128,6 +132,24 @@ export const resolveSettingsPath = (
   cfg: GlobalConfig,
   repo: RepoConfig,
 ): string | null => repo.settingsPath ?? cfg.settingsPath;
+
+// Repo-level profile name wins over global; either may be null. Returns the
+// loaded Profile or null when no profile is configured or the file is missing.
+// Throws when the referenced profile exists but fails validation — callers
+// surface that as a user-visible error rather than silently falling back.
+export const resolveProfile = (
+  cfg: GlobalConfig,
+  repo: RepoConfig,
+): Profile | null => {
+  const name = repo.profile ?? cfg.profile;
+  if (!name) return null;
+  return loadProfile(name);
+};
+
+export const resolveProfileName = (
+  cfg: GlobalConfig,
+  repo: RepoConfig,
+): string | null => repo.profile ?? cfg.profile;
 
 export const upsertRepo = (cfg: GlobalConfig, repo: RepoConfig): GlobalConfig => {
   const idx = cfg.repos.findIndex((r) => r.name === repo.name);
