@@ -17,7 +17,7 @@ export const RepoBar: React.FC = () => {
         const sel = i === repoIdx;
         return (
           <React.Fragment key={r.name}>
-            <Text color={sel ? "cyan" : "white"} bold={sel}>
+            <Text color={sel ? "cyan" : undefined} bold={sel} dimColor={!sel}>
               {sel ? "● " : "○ "}{r.name}
             </Text>
             <Text dimColor> [{r.provider}]</Text>

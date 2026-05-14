@@ -51,7 +51,7 @@ export const store = createStore<State>((set, get) => ({
   config: loadConfig(),
   agents: {},
   issuesByRepo: {},
-  focus: { pane: "issues", repoIdx: 0, issueIdx: 0, agentIdx: 0 },
+  focus: { pane: "repos", repoIdx: 0, issueIdx: 0, agentIdx: 0 },
   totalInTokens: 0,
   totalOutTokens: 0,
   nextPollAt: undefined,
