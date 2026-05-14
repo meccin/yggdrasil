@@ -53,6 +53,24 @@ export const finalize = async (
   const source = getSource(repo.provider);
   let prUrl: string | undefined;
 
+  const tryCreate = (): string | undefined => {
+    const created = source.createPr(
+      repo.remoteRepo,
+      agent.worktreePath,
+      agent.branch,
+      defaultTitle(agent),
+    );
+    if (created.url) return created.url;
+    const err = (created.stderr || created.stdout || "").trim().slice(0, 300);
+    if (err) log(agent.id, `create PR/MR failed: ${err}`);
+    const existing = source.findPrBySourceBranch(repo.remoteRepo, agent.branch);
+    if (existing) {
+      log(agent.id, `recovered via list: ${existing.url}`);
+      return existing.url;
+    }
+    return undefined;
+  };
+
   if (push.branchExisted) {
     log(agent.id, "branch already existed upstream — looking for open PR/MR");
     const existing = source.findPrBySourceBranch(repo.remoteRepo, agent.branch);
@@ -61,23 +79,11 @@ export const finalize = async (
       log(agent.id, `found existing: ${prUrl}`);
     } else {
       log(agent.id, "no open PR/MR — creating new");
-      const created = source.createPr(
-        repo.remoteRepo,
-        agent.worktreePath,
-        agent.branch,
-        defaultTitle(agent),
-      );
-      prUrl = created?.url;
+      prUrl = tryCreate();
     }
   } else {
     log(agent.id, "creating PR/MR");
-    const created = source.createPr(
-      repo.remoteRepo,
-      agent.worktreePath,
-      agent.branch,
-      defaultTitle(agent),
-    );
-    prUrl = created?.url;
+    prUrl = tryCreate();
   }
 
   if (prUrl) {

@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Box, Text, useApp, useInput } from "ink";
+import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { Header } from "./Header";
 import { RepoBar } from "./RepoBar";
 import { IssueList } from "./IssueList";
@@ -64,6 +64,20 @@ export const App: React.FC = () => {
   const [diffTopIdx, setDiffTopIdx] = useState<number | null>(null);
   const [diffRefreshKey, setDiffRefreshKey] = useState(0);
 
+  // Cap root layout to terminal height so content never overflows and pushes
+  // the top (Header/RepoBar) out of view. Ink without an explicit height
+  // renders all children; when total > rows the terminal scrolls.
+  const { stdout } = useStdout();
+  const [termRows, setTermRows] = useState<number>(stdout?.rows ?? 40);
+  useEffect(() => {
+    if (!stdout) return;
+    const onResize = () => setTermRows(stdout.rows || 40);
+    stdout.on("resize", onResize);
+    return () => {
+      stdout.off("resize", onResize);
+    };
+  }, [stdout]);
+
   // No manual screen clears on view transitions: useEffect fires AFTER Ink
   // commits a frame, so writing escape codes here would erase the freshly
   // painted view (help / fullscreen log) and nothing would repaint until
@@ -80,6 +94,14 @@ export const App: React.FC = () => {
   const showFlash = (msg: string) => {
     setFlash(msg);
     setTimeout(() => setFlash(null), 2500);
+  };
+
+  const cycleFilter = () => {
+    const idx = LOG_FILTER_ORDER.indexOf(logFilter);
+    const next = LOG_FILTER_ORDER[(idx + 1) % LOG_FILTER_ORDER.length];
+    setLogFilter(next);
+    setLogTopIdx(null);
+    showFlash(`filter: ${next}`);
   };
 
   const sortedAgents = useMemo(
@@ -153,7 +175,14 @@ export const App: React.FC = () => {
     }
 
     if (fullLog) {
-      if (key.escape || input === "l" || input === "q") setFullLog(false);
+      if (key.escape || input === "l" || input === "q") {
+        setFullLog(false);
+        return;
+      }
+      if (input === "f") {
+        cycleFilter();
+        return;
+      }
       return;
     }
 
@@ -292,14 +321,9 @@ export const App: React.FC = () => {
         }
         return;
       }
-      case "f": {
-        const idx = LOG_FILTER_ORDER.indexOf(logFilter);
-        const next = LOG_FILTER_ORDER[(idx + 1) % LOG_FILTER_ORDER.length];
-        setLogFilter(next);
-        setLogTopIdx(null);
-        showFlash(`filter: ${next}`);
+      case "f":
+        cycleFilter();
         return;
-      }
       case "l":
         if (currentAgent()) setFullLog(true);
         return;
@@ -356,7 +380,7 @@ export const App: React.FC = () => {
 
   if (helpOpen) {
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" height={termRows} overflow="hidden">
         <Header />
         <HelpModal />
       </Box>
@@ -365,7 +389,7 @@ export const App: React.FC = () => {
 
   if (fullLog) {
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" height={termRows} overflow="hidden">
         <Header />
         <LogPane fullscreen topIdx={logTopIdx} filter={logFilter} />
         <Box paddingX={1}>
@@ -377,7 +401,7 @@ export const App: React.FC = () => {
 
   if (fullDiff) {
     return (
-      <Box flexDirection="column">
+      <Box flexDirection="column" height={termRows} overflow="hidden">
         <Header />
         <DiffPane topIdx={diffTopIdx} refreshKey={diffRefreshKey} />
         <Box paddingX={1}>
@@ -388,11 +412,11 @@ export const App: React.FC = () => {
   }
 
   return (
-    <Box flexDirection="column">
+    <Box flexDirection="column" height={termRows} overflow="hidden">
       <Header />
       <RepoBar />
       <Box flexDirection="column" flexGrow={1}>
-        <Box flexShrink={0}>
+        <Box>
           <IssueList />
           <AgentGrid />
         </Box>

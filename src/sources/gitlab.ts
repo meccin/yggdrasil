@@ -70,13 +70,12 @@ export const gitlabSource: IssueSource = {
     }
   },
 
-  createPr(repo, cwd, branch, title): PrRef | null {
+  createPr(repo, cwd, branch, title) {
     const r = run(
       ["mr", "create", "-R", repo, "--source-branch", branch, "--title", title, "--fill", "--yes"],
       cwd,
     );
-    if (!r.ok) return null;
     const url = (r.stdout.match(/https?:\/\/\S+/) || [])[0];
-    return url ? { url } : null;
+    return { url, stdout: r.stdout, stderr: r.stderr };
   },
 };

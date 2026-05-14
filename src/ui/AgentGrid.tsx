@@ -40,7 +40,7 @@ const Card: React.FC<{ a: Agent; selected: boolean }> = ({ a, selected }) => (
     paddingX={1}
   >
     <Box justifyContent="space-between">
-      <Text bold>#{a.issueId} {truncate(a.issueTitle, 28)}</Text>
+      <Text bold wrap="truncate-end">#{a.issueId} {truncate(a.issueTitle, 28)}</Text>
       <Text color={colorFor(a.status)}>{a.status}</Text>
     </Box>
     <Box>
@@ -53,11 +53,11 @@ const Card: React.FC<{ a: Agent; selected: boolean }> = ({ a, selected }) => (
       <Text color="green">{fmtTok(a.outputTokens)}↓</Text>
     </Box>
     {a.currentTool && (
-      <Text dimColor>tool: <Text color="cyan">{a.currentTool}</Text></Text>
+      <Text dimColor wrap="truncate-end">tool: <Text color="cyan">{a.currentTool}</Text></Text>
     )}
-    {a.lastText && <Text dimColor>{truncate(a.lastText, 50)}</Text>}
-    {a.errorMessage && <Text color="red">err: {truncate(a.errorMessage, 50)}</Text>}
-    {a.mrUrl && <Text color="blue">{a.mrUrl}</Text>}
+    {a.lastText && <Text dimColor wrap="truncate-end">{truncate(a.lastText, 50)}</Text>}
+    {a.errorMessage && <Text color="red" wrap="truncate-end">err: {truncate(a.errorMessage, 50)}</Text>}
+    {a.mrUrl && <Text color="blue" wrap="truncate-end">{a.mrUrl}</Text>}
   </Box>
 );
 

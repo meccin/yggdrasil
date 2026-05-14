@@ -94,13 +94,12 @@ export const githubSource: IssueSource = {
     }
   },
 
-  createPr(repo, cwd, branch, title): PrRef | null {
+  createPr(repo, cwd, branch, title) {
     const r = run(
       ["pr", "create", "-R", repo, "--head", branch, "--title", title, "--fill"],
       cwd,
     );
-    if (!r.ok) return null;
     const url = (r.stdout.match(/https?:\/\/\S+/) || [])[0];
-    return url ? { url } : null;
+    return { url, stdout: r.stdout, stderr: r.stderr };
   },
 };

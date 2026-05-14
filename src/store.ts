@@ -91,7 +91,11 @@ export const store = createStore<State>((set, get) => ({
     set((s) => {
       const next = { ...s.agents };
       delete next[id];
-      return { agents: next };
+      const remainingCount = Object.keys(next).length;
+      const maxIdx = Math.max(0, remainingCount - 1);
+      const agentIdx = Math.min(s.focus.agentIdx, maxIdx);
+      const pane = remainingCount === 0 && s.focus.pane === "agents" ? "issues" : s.focus.pane;
+      return { agents: next, focus: { ...s.focus, agentIdx, pane } };
     }),
   setStatus: (id, status) =>
     set((s) => {

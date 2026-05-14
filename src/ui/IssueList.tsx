@@ -62,7 +62,7 @@ export const IssueList: React.FC = () => {
       {issues.slice(0, maxVisible).map((i, idx) => {
         const sel = focused && idx === issueIdx;
         return (
-          <Text key={i.iid} color={sel ? "cyan" : "white"} bold={sel}>
+          <Text key={i.iid} color={sel ? "cyan" : "white"} bold={sel} wrap="truncate-end">
             {sel ? "▸ " : "  "}#{i.iid} {truncate(i.title, 28)}
           </Text>
         );
