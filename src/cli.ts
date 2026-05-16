@@ -1,6 +1,5 @@
 import { existsSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { spawnSync } from "node:child_process";
 import {
   loadConfig,
   saveConfig,
@@ -21,14 +20,16 @@ import {
   scaffoldHarness,
   scaffoldOpenspec,
 } from "./profile";
+import { hasBin, glabAuthOk, ghAuthOk } from "./doctor";
 
-const VERSION = "1.0.1";
+const VERSION = "1.1.0";
 
 const printHelp = (): void => {
   console.log(`Yggdrasil ${VERSION} — TUI multi-agent dashboard
 
 Usage:
-  ygg                                opens TUI (default)
+  ygg                                opens TUI (default; prompts setup wizard when no repos)
+  ygg init                           interactive setup wizard (first-run friendly)
   ygg repo add <path> [opts]         add repo (auto-detect provider+remote)
                                        --label NAME        autoSpawn label
                                        --provider gitlab|github   force provider
@@ -69,23 +70,6 @@ Usage:
   ygg --help                         this help
 `);
 };
-
-const hasBin = (name: string): boolean => {
-  const r = spawnSync("which", [name], { encoding: "utf8" });
-  return r.status === 0 && Boolean(r.stdout.trim());
-};
-
-// glab/gh return exit 1 when ANY configured host fails (e.g. default gitlab.com
-// without a token), even though the user is properly logged in to a self-hosted
-// instance. Parse stdout+stderr for "Logged in" to decide.
-const authOk = (bin: string): boolean => {
-  const r = spawnSync(bin, ["auth", "status"], { encoding: "utf8" });
-  const out = `${r.stdout || ""}\n${r.stderr || ""}`;
-  return /Logged in to/i.test(out);
-};
-
-const glabAuthOk = (): boolean => authOk("glab");
-const ghAuthOk = (): boolean => authOk("gh");
 
 const cmdDoctor = (): number => {
   ensureUserDirs();
@@ -725,9 +709,82 @@ const cmdMetrics = (rawArgs: string[]): number => {
   return 0;
 };
 
+// Inline y/N confirm rendered before the TUI launches when the user has no
+// repos configured. Resolves true when the user accepts and the wizard
+// completed (or false on decline / cancel). Kept tiny on purpose — bigger
+// onboarding lives in `ygg init`.
+const maybePromptInit = async (): Promise<{ accepted: boolean }> => {
+  // Lazy-load Ink + React so non-TUI commands (metrics, doctor, repo …)
+  // never pay the dependency-graph cost.
+  const React = (await import("react")).default;
+  const { render, Box, Text, useApp, useInput } = await import("ink");
+
+  return new Promise((resolveOuter) => {
+    let answered = false;
+    const Prompt: React.FC = () => {
+      const { exit } = useApp();
+      useInput((input, key) => {
+        if (key.escape || input === "n" || input === "N") {
+          answered = true;
+          resolveOuter({ accepted: false });
+          exit();
+          return;
+        }
+        if (key.return || input === "y" || input === "Y") {
+          answered = true;
+          resolveOuter({ accepted: true });
+          exit();
+          return;
+        }
+      });
+      return React.createElement(
+        Box,
+        { flexDirection: "column", paddingX: 1, borderStyle: "round", borderColor: "magenta" },
+        React.createElement(
+          Text,
+          { color: "magenta", bold: true },
+          "No repos configured.",
+        ),
+        React.createElement(
+          Text,
+          null,
+          "Run the setup wizard to add one? ",
+          React.createElement(Text, { color: "cyan" }, "(Y/n)"),
+        ),
+      );
+    };
+    const ink = render(React.createElement(Prompt));
+    ink.waitUntilExit().then(() => {
+      if (!answered) resolveOuter({ accepted: false });
+    });
+  });
+};
+
+const cmdInit = async (): Promise<number> => {
+  const { runWizard } = await import("./wizard/run");
+  const result = await runWizard();
+  if (result.launchTui) {
+    const { runTui } = await import("./index");
+    await runTui();
+    return 0;
+  }
+  // Exit non-zero when the wizard halted because the environment is not
+  // ready — matches `ygg doctor`'s exit semantics so scripts can detect it.
+  return result.reason === "blocked" ? 1 : 0;
+};
+
 export const main = async (argv: string[]): Promise<number> => {
   const [cmd, ...rest] = argv;
   if (!cmd || cmd === "tui") {
+    const cfg = loadConfig();
+    if (cfg.repos.length === 0) {
+      const { accepted } = await maybePromptInit();
+      if (accepted) {
+        const { runWizard } = await import("./wizard/run");
+        const result = await runWizard();
+        if (!result.launchTui) return 0;
+      }
+    }
     const { runTui } = await import("./index");
     await runTui();
     return 0;
@@ -740,6 +797,7 @@ export const main = async (argv: string[]): Promise<number> => {
     printHelp();
     return 0;
   }
+  if (cmd === "init") return cmdInit();
   if (cmd === "doctor") return cmdDoctor();
   if (cmd === "metrics") return cmdMetrics(rest);
   if (cmd === "repo") {

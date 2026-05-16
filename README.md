@@ -40,10 +40,33 @@ ygg doctor
 
 `bun link` exposes the `ygg` binary in `~/.bun/bin/` (make sure that's in your `$PATH`).
 
+## Quick start
+
+```bash
+cd /path/to/your/git/repo
+ygg            # prompts to run the setup wizard when no repos configured
+# or
+ygg init       # always launches the wizard
+```
+
+The wizard walks through five screens — environment checks, repo path,
+provider confirm, permission preset (`safe` / `balanced` / `yolo`), and
+label + finalize mode — then drops you straight into the TUI. Use it for
+your first install or whenever you'd rather not memorise the flag matrix.
+
+<video src="https://github.com/meccin/yggdrasil/raw/main/docs/screenshots/yggdrasil-wizard.mp4" controls width="720">
+  Your browser does not support the video tag —
+  <a href="docs/screenshots/yggdrasil-wizard.mp4">download the demo</a>.
+</video>
+
+Everything the wizard sets is also reachable via `ygg repo add` /
+`ygg repo set` / `ygg config set` for scripting and power use.
+
 ## CLI
 
 ```
-ygg                                  # opens TUI
+ygg                                  # opens TUI (prompts wizard when no repos configured)
+ygg init                             # interactive setup wizard
 ygg repo add <path> [opts]           # register a repo (or update if name exists)
     --label NAME                     # custom autoSpawn label (default: agent-ready)
     --provider gitlab|github         # force provider (auto-detected by default)

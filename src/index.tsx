@@ -6,25 +6,7 @@ import { startPoller, stopPoller } from "./auto/poller";
 import { killAllAgents } from "./agent/runner";
 import { pruneOldestFiles } from "./rotation";
 import { logsRoot } from "./paths";
-
-const ENTER_ALT_SCREEN = "\x1b[?1049h\x1b[H";
-const LEAVE_ALT_SCREEN = "\x1b[?1049l";
-const HIDE_CURSOR = "\x1b[?25l";
-const SHOW_CURSOR = "\x1b[?25h";
-
-let altScreenActive = false;
-
-const enterAltScreen = (): void => {
-  if (altScreenActive) return;
-  process.stdout.write(ENTER_ALT_SCREEN + HIDE_CURSOR);
-  altScreenActive = true;
-};
-
-const leaveAltScreen = (): void => {
-  if (!altScreenActive) return;
-  process.stdout.write(SHOW_CURSOR + LEAVE_ALT_SCREEN);
-  altScreenActive = false;
-};
+import { enterAltScreen, leaveAltScreen } from "./altScreen";
 
 export const runTui = async (): Promise<void> => {
   hydrateState();
