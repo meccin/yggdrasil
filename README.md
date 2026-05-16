@@ -54,7 +54,7 @@ provider confirm, permission preset (`safe` / `balanced` / `yolo`), and
 label + finalize mode — then drops you straight into the TUI. Use it for
 your first install or whenever you'd rather not memorise the flag matrix.
 
-<video src="https://github.com/meccin/yggdrasil/raw/main/docs/screenshots/yggdrasil-wizard.mp4" controls width="720">
+<video src="https://github.com/user-attachments/assets/c2c807fa-96c3-4e6a-95ec-2632f1a65d08" controls width="720">
   Your browser does not support the video tag —
   <a href="docs/screenshots/yggdrasil-wizard.mp4">download the demo</a>.
 </video>
