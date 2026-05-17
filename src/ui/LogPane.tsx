@@ -7,7 +7,7 @@ import type { AgentEvent } from "../types";
 // row + footer + flash buffer). LogPane consumes terminal rows minus this so
 // the whole TUI never exceeds the alt-screen height — overflow is what causes
 // Ink's anchor to desync and leave ghost frames at the top.
-const RESERVED_ROWS_MAIN = 22;
+const RESERVED_ROWS_MAIN = 23;
 const RESERVED_ROWS_FULLSCREEN = 5;
 const MIN_LINES = 5;
 

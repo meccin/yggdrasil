@@ -7,6 +7,9 @@ import { useStore, useStoreShallow } from "./useStore";
 // pane plus issues pane stays within the terminal alongside the log pane.
 const CARD_HEIGHT = 7;
 const ROWS_RESERVED_AROUND_GRID = 26;
+// Mirrors the fixed width on IssueList (src/ui/IssueList.tsx). Keep in sync.
+const ISSUE_LIST_WIDTH = 36;
+const MIN_PANEL_WIDTH = 24;
 
 const colorFor = (s: AgentStatus): string => {
   switch (s) {
@@ -32,12 +35,13 @@ const fmtTok = (n: number): string => {
 
 const truncate = (s: string, n: number) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
-const Card: React.FC<{ a: Agent; selected: boolean }> = ({ a, selected }) => (
+const Card: React.FC<{ a: Agent; selected: boolean; width: number }> = ({ a, selected, width }) => (
   <Box
     flexDirection="column"
     borderStyle={selected ? "double" : "single"}
     borderColor={selected ? "cyan" : colorFor(a.status)}
     paddingX={1}
+    width={width}
   >
     <Box justifyContent="space-between">
       <Text bold wrap="truncate-end">#{a.issueId} {truncate(a.issueTitle, 28)}</Text>
@@ -72,9 +76,13 @@ export const AgentGrid: React.FC = () => {
   const agentIdx = useStore((s) => s.focus.agentIdx);
   const { stdout } = useStdout();
   const [rows, setRows] = useState<number>(stdout?.rows ?? 40);
+  const [cols, setCols] = useState<number>(stdout?.columns ?? 120);
   useEffect(() => {
     if (!stdout) return;
-    const onResize = () => setRows(stdout.rows || 40);
+    const onResize = () => {
+      setRows(stdout.rows || 40);
+      setCols(stdout.columns || 120);
+    };
     stdout.on("resize", onResize);
     return () => {
       stdout.off("resize", onResize);
@@ -94,13 +102,21 @@ export const AgentGrid: React.FC = () => {
   const hiddenBefore = start;
   const hiddenAfter = Math.max(0, sorted.length - (start + visible.length));
 
+  // Explicit width prevents Yoga from growing the panel/cards to fit unbounded
+  // Text content (e.g. mrUrl), which otherwise pushes the card border flush
+  // against the outer panel border. Card width = panel width minus outer
+  // border (2) and paddingX (2).
+  const panelWidth = Math.max(MIN_PANEL_WIDTH, cols - ISSUE_LIST_WIDTH);
+  const cardWidth = Math.max(MIN_PANEL_WIDTH - 4, panelWidth - 4);
+
   return (
     <Box
       flexDirection="column"
       borderStyle="single"
       borderColor={focused ? "cyan" : "gray"}
       paddingX={1}
-      flexGrow={1}
+      paddingBottom={1}
+      width={panelWidth}
     >
       <Text bold>AGENTS</Text>
       {sorted.length === 0 && (
@@ -108,7 +124,7 @@ export const AgentGrid: React.FC = () => {
       )}
       {hiddenBefore > 0 && <Text dimColor>… +{hiddenBefore} above</Text>}
       {visible.map((a, idx) => (
-        <Card key={a.id} a={a} selected={focused && start + idx === agentIdx} />
+        <Card key={a.id} a={a} selected={focused && start + idx === agentIdx} width={cardWidth} />
       ))}
       {hiddenAfter > 0 && <Text dimColor>… +{hiddenAfter} below</Text>}
     </Box>

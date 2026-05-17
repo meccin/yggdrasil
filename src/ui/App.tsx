@@ -183,6 +183,30 @@ export const App: React.FC = () => {
         cycleFilter();
         return;
       }
+      if (input === "g") {
+        setLogTopIdx(0);
+        return;
+      }
+      if (input === "G") {
+        setLogTopIdx(null);
+        return;
+      }
+      if (key.upArrow) {
+        setLogTopIdx((cur) => (cur ?? Infinity) - 1);
+        return;
+      }
+      if (key.downArrow) {
+        setLogTopIdx((cur) => (cur ?? Infinity) + 1);
+        return;
+      }
+      if (key.pageUp) {
+        setLogTopIdx((cur) => (cur ?? Infinity) - 10);
+        return;
+      }
+      if (key.pageDown) {
+        setLogTopIdx((cur) => (cur ?? Infinity) + 10);
+        return;
+      }
       return;
     }
 
