@@ -1,7 +1,7 @@
-import { mkdirSync, existsSync, rmSync, statSync } from "node:fs";
+import { mkdirSync, existsSync, readdirSync, rmSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { runGit } from "../git";
-import { worktreeFor } from "../paths";
+import { worktreeFor, worktreesRoot } from "../paths";
 
 export interface WorktreeRef {
   path: string;
@@ -101,6 +101,60 @@ export const removeWorktree = (
   }
   if (opts.deleteBranch) {
     runGit(["branch", "-D", branch], repoPath);
+  }
+};
+
+// Sweep worktrees that no current repo owns. Catches leftovers from
+// `migrateRepoName` (host-prefixed slug → short slug) where the old worktree
+// dir still holds a branch and blocks fresh spawns. For each known repo, asks
+// git which worktrees it has registered, removes any whose slug-directory
+// doesn't match any current repo name, drops the matching `agent/issue-N`
+// branch, then rm -rf's leftover dirs under wt root.
+export const sweepOrphanWorktrees = (
+  repos: { name: string; path: string }[],
+): void => {
+  const wtRoot = worktreesRoot();
+  if (!existsSync(wtRoot)) return;
+  const slugify = (n: string) => n.replace(/[^a-zA-Z0-9_-]+/g, "-");
+  const knownSlugs = new Set(repos.map((r) => slugify(r.name)));
+
+  for (const repo of repos) {
+    if (!existsSync(repo.path)) continue;
+    const r = runGit(["worktree", "list", "--porcelain"], repo.path);
+    if (!r.ok) continue;
+    const paths = r.stdout
+      .split("\n")
+      .filter((l) => l.startsWith("worktree "))
+      .map((l) => l.slice("worktree ".length).trim());
+    for (const wtPath of paths) {
+      if (!wtPath.startsWith(wtRoot + "/")) continue;
+      const rel = wtPath.slice(wtRoot.length + 1);
+      const slug = rel.split("/")[0];
+      if (knownSlugs.has(slug)) continue;
+      runGit(["worktree", "remove", "--force", wtPath], repo.path);
+      const m = rel.match(/^[^/]+\/issue-(\d+)$/);
+      if (m) runGit(["branch", "-D", `agent/issue-${m[1]}`], repo.path);
+    }
+    runGit(["worktree", "prune"], repo.path);
+  }
+
+  let topEntries: string[] = [];
+  try {
+    topEntries = readdirSync(wtRoot);
+  } catch {
+    return;
+  }
+  for (const slug of topEntries) {
+    if (knownSlugs.has(slug)) continue;
+    const dir = join(wtRoot, slug);
+    try {
+      if (!statSync(dir).isDirectory()) continue;
+    } catch {
+      continue;
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {}
   }
 };
 

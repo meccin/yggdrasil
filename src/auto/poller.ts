@@ -17,6 +17,7 @@ const tick = async (): Promise<void> => {
     const issues = source.list(repo.remoteRepo, {
       label: repo.autoSpawnLabel,
       state: "opened",
+      limit: state.config.maxIssuesPerRepo,
     });
     for (const issue of issues) {
       if (!hasCapacity()) break;

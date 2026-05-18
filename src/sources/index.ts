@@ -52,9 +52,16 @@ export const detectRemote = (repoPath: string): RemoteInfo | null => {
   return { provider: "gitlab", repo: slug };
 };
 
+// Display-only short name. Returns just the path portion of the origin URL
+// (e.g. "group/proj") so self-hosted GitLab repos don't carry their host into
+// the UI. `remoteRepo` still gets the host-prefixed slug from detectRemote
+// because glab needs it to resolve the API endpoint.
 export const repoNameFromPath = (repoPath: string): string => {
-  const info = detectRemote(repoPath);
-  if (info) return info.repo;
+  const r = runGit(["remote", "get-url", "origin"], repoPath);
+  if (r.ok) {
+    const parsed = parseRemoteUrl(r.stdout.trim());
+    if (parsed) return parsed.path;
+  }
   const parts = repoPath.split("/").filter(Boolean);
   return parts.slice(-2).join("/") || parts[parts.length - 1] || repoPath;
 };

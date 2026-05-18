@@ -131,6 +131,7 @@ restart `ygg`. Shape:
   "disallowedTools": [],
   "settingsPath": null,                  // global claude --settings path
   "profile": null,                       // global pipeline profile (see "Profiles")
+  "maxIssuesPerRepo": 200,               // 50..2000; paginates source CLI
   "repos": [
     {
       "name": "owner/project",
@@ -454,6 +455,18 @@ Yggdrasil-driven retry loops are tracked for post-v1.0.0.
 While a profile is active, the agent card shows `[N/M]` next to its status. A
 `system` log line like `step 2/3: implement` marks each boundary so the timeline in
 the log pane is auditable.
+
+### Issue filter (`/`) and repo fold (v1.2)
+
+In the issues pane, press `/` to filter the list live. Substring matches the
+title; a leading `#` (or any bare digit run) matches the issue number prefix.
+Enter keeps the filter active and returns to navigation; Esc clears it.
+
+The repo bar folds non-selected repos to their short name only — selected repo
+keeps full `[provider]` / `[auto:label]` info. Scales cleanly past 10+ repos.
+
+Issue fetch is now config-driven (`maxIssuesPerRepo`, default 200). `glab`
+paginates internally to honor the cap; `gh` uses `--limit` directly.
 
 ### Re-spawn (`R`)
 

@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { Header } from "./Header";
 import { RepoBar } from "./RepoBar";
-import { IssueList } from "./IssueList";
+import { IssueList, matchesIssueFilter } from "./IssueList";
 import { AgentGrid } from "./AgentGrid";
 import { LogPane, type LogFilter, LOG_FILTER_ORDER } from "./LogPane";
 import { DiffPane } from "./DiffPane";
@@ -26,7 +26,10 @@ const PANE_ORDER: Pane[] = ["repos", "issues", "agents", "log"];
 // Build the footer hint string from the focused agent's state so action keys
 // (kill/delete/re-spawn/log/diff) only show when they actually do something.
 // Reduces noise and keeps the line from wrapping on narrower terminals.
-const footerHints = (agent: { status: string } | undefined): string => {
+const footerHints = (
+  agent: { status: string } | undefined,
+  pane: Pane,
+): string => {
   const parts: string[] = ["tab:focus", "enter:spawn"];
   if (agent) {
     if (agent.status === "running") parts.push("k:kill");
@@ -36,7 +39,9 @@ const footerHints = (agent: { status: string } | undefined): string => {
     }
     parts.push("l:log", "v:diff");
   }
-  parts.push("f:filter", "a:auto", "p:poll", "+/-:conc", "?:help", "q:quit");
+  if (pane === "issues") parts.push("/:find");
+  if (pane === "log") parts.push("f:filter");
+  parts.push("a:auto", "p:poll", "+/-:conc", "?:help", "q:quit");
   return parts.join(" · ");
 };
 
@@ -63,6 +68,9 @@ export const App: React.FC = () => {
   // re-fetches git output without remounting.
   const [diffTopIdx, setDiffTopIdx] = useState<number | null>(null);
   const [diffRefreshKey, setDiffRefreshKey] = useState(0);
+  // Issue filter: `/` enters typing mode, Enter keeps filter, Esc clears.
+  const [issueFilter, setIssueFilter] = useState("");
+  const [issueFilterMode, setIssueFilterMode] = useState(false);
 
   // Cap root layout to terminal height so content never overflows and pushes
   // the top (Header/RepoBar) out of view. Ink without an explicit height
@@ -91,6 +99,11 @@ export const App: React.FC = () => {
     setLogTopIdx(null);
   }, [focus.agentIdx]);
 
+  // Filter changes invalidate issueIdx — snap back to top of visible list.
+  useEffect(() => {
+    getState().setFocus({ issueIdx: 0 });
+  }, [issueFilter]);
+
   const showFlash = (msg: string) => {
     setFlash(msg);
     setTimeout(() => setFlash(null), 2500);
@@ -113,7 +126,8 @@ export const App: React.FC = () => {
   const currentIssues = (): Issue[] => {
     const r = currentRepo();
     if (!r) return [];
-    return issuesByRepo[r.name] || [];
+    const all = issuesByRepo[r.name] || [];
+    return all.filter((i) => matchesIssueFilter(i, issueFilter));
   };
   const currentIssue = () => currentIssues()[focus.issueIdx];
   const currentAgent = () => sortedAgents[focus.agentIdx];
@@ -248,6 +262,27 @@ export const App: React.FC = () => {
       return;
     }
 
+    if (issueFilterMode) {
+      if (key.escape) {
+        setIssueFilter("");
+        setIssueFilterMode(false);
+        return;
+      }
+      if (key.return) {
+        setIssueFilterMode(false);
+        return;
+      }
+      if (key.backspace || key.delete) {
+        setIssueFilter((s) => s.slice(0, -1));
+        return;
+      }
+      if (input && !key.ctrl && !key.meta) {
+        setIssueFilter((s) => s + input);
+        return;
+      }
+      return;
+    }
+
     if (key.tab) {
       const idx = PANE_ORDER.indexOf(focus.pane);
       const next = PANE_ORDER[(idx + 1) % PANE_ORDER.length];
@@ -313,6 +348,9 @@ export const App: React.FC = () => {
     }
 
     switch (input) {
+      case "/":
+        if (focus.pane === "issues") setIssueFilterMode(true);
+        return;
       case "?":
         setHelpOpen(true);
         return;
@@ -441,7 +479,7 @@ export const App: React.FC = () => {
       <RepoBar />
       <Box flexDirection="column" flexGrow={1}>
         <Box>
-          <IssueList />
+          <IssueList filter={issueFilter} filterMode={issueFilterMode} />
           <AgentGrid />
         </Box>
         <Box flexGrow={1}>
@@ -449,7 +487,7 @@ export const App: React.FC = () => {
         </Box>
       </Box>
       <Box paddingX={1} borderStyle="single" borderColor="gray">
-        <Text dimColor>{footerHints(currentAgent())}</Text>
+        <Text dimColor>{footerHints(currentAgent(), focus.pane)}</Text>
       </Box>
       {flash && (
         <Box paddingX={1}>

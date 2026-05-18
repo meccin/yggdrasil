@@ -31,6 +31,7 @@ export const githubSource: IssueSource = {
   cliName: "gh",
 
   list(repo, opts = {}) {
+    const limit = Math.max(1, opts.limit ?? 50);
     const args = [
       "issue",
       "list",
@@ -39,7 +40,7 @@ export const githubSource: IssueSource = {
       "--state",
       stateFlag(opts.state),
       "--limit",
-      "50",
+      String(limit),
       "--json",
       ISSUE_JSON_FIELDS,
     ];

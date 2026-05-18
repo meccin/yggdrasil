@@ -23,20 +23,42 @@ export const gitlabSource: IssueSource = {
   cliName: "glab",
 
   list(repo, opts = {}) {
-    // glab issue list defaults to opened; `--closed` / `--all` are the only
-    // alternatives. There is no `--state` flag.
-    const args = ["issue", "list", "-R", repo, "-O", "json", "-P", "50"];
-    if (opts.label) args.push("--label", opts.label);
-    if (opts.state === "closed") args.push("--closed");
-    else if (opts.state === "all") args.push("--all");
-    const r = runRead(args);
-    if (!r.ok) return [];
-    try {
-      const arr = JSON.parse(r.stdout);
-      return arr.map(toIssue);
-    } catch {
-      return [];
+    // glab REST API caps `--per-page` at 100, so honor higher `limit` by
+    // paginating with `--page N` and stopping at the first short/empty page.
+    // `--closed` / `--all` toggle state — there is no `--state` flag.
+    const target = Math.max(1, opts.limit ?? 50);
+    const perPage = Math.min(100, target);
+    const out: any[] = [];
+    for (let page = 1; out.length < target; page++) {
+      const args = [
+        "issue",
+        "list",
+        "-R",
+        repo,
+        "-O",
+        "json",
+        "-P",
+        String(perPage),
+        "--page",
+        String(page),
+      ];
+      if (opts.label) args.push("--label", opts.label);
+      if (opts.state === "closed") args.push("--closed");
+      else if (opts.state === "all") args.push("--all");
+      const r = runRead(args);
+      if (!r.ok) break;
+      let arr: any[];
+      try {
+        arr = JSON.parse(r.stdout);
+      } catch {
+        break;
+      }
+      if (!Array.isArray(arr) || arr.length === 0) break;
+      out.push(...arr);
+      if (arr.length < perPage) break;
+      if (page >= 50) break;
     }
+    return out.slice(0, target).map(toIssue);
   },
 
   view(repo, iid) {

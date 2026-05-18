@@ -11,6 +11,7 @@ const NAVIGATION: Row[] = [
   { key: "↑/↓", label: "navigate list (scrolls log when log pane is focused)" },
   { key: "←/→", label: "navigate repos (when repos pane is focused)" },
   { key: "Enter", label: "spawn agent on selected issue" },
+  { key: "/", label: "filter issues (Enter keeps, Esc clears, #N matches iid)" },
 ];
 
 const AGENT: Row[] = [

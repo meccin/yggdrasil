@@ -20,8 +20,8 @@ export const RepoBar: React.FC = () => {
             <Text color={sel ? "cyan" : undefined} bold={sel} dimColor={!sel}>
               {sel ? "● " : "○ "}{r.name}
             </Text>
-            <Text dimColor> [{r.provider}]</Text>
-            {r.autoSpawn && <Text color="green"> [auto:{r.autoSpawnLabel}]</Text>}
+            {sel && <Text dimColor> [{r.provider}]</Text>}
+            {sel && r.autoSpawn && <Text color="green"> [auto:{r.autoSpawnLabel}]</Text>}
             <Text dimColor>  </Text>
           </React.Fragment>
         );

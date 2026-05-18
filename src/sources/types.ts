@@ -24,7 +24,11 @@ export interface IssueSource {
   readonly cliName: string;
   list(
     repo: string,
-    opts?: { label?: string; state?: "opened" | "closed" | "all" },
+    opts?: {
+      label?: string;
+      state?: "opened" | "closed" | "all";
+      limit?: number;
+    },
   ): Issue[];
   view(repo: string, iid: number): Issue | null;
   comment(repo: string, iid: number, message: string): boolean;

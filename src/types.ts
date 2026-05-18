@@ -54,6 +54,9 @@ export interface GlobalConfig {
   // Optional default profile name (resolved against ~/.yggdrasil/profiles/).
   // Repo-level `profile` overrides this. null = no pipeline (classic prompt).
   profile: string | null;
+  // Max open issues fetched per repo per refresh. Sources paginate up to this.
+  // Default 200, clamped to [50, 2000].
+  maxIssuesPerRepo: number;
   repos: RepoConfig[];
 }
 

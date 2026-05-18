@@ -4,6 +4,7 @@ import type { GlobalConfig, RepoConfig, PermissionMode, FinalizeMode } from "./t
 import type { Provider } from "./sources/types";
 import { detectRemote } from "./sources";
 import { loadProfile, type Profile } from "./profile";
+import { sweepOrphanWorktrees } from "./agent/worktree";
 
 // Default tools a fresh-installed Yggdrasil will allow on every spawn unless
 // the repo overrides it. Picked to cover the typical coding-agent flow
@@ -21,12 +22,25 @@ const DEFAULT_CONFIG: GlobalConfig = {
   settingsPath: null,
   notifications: true,
   profile: null,
+  maxIssuesPerRepo: 200,
   repos: [],
 };
 
 // Migrate older entries that stored remoteRepo without the host. Only fires
 // when the detected slug *adds* a host prefix to the stored value — never
 // shortens or replaces a manually-edited slug.
+// Older repo entries stored display `name` as the full host-prefixed slug
+// (e.g. "gitlab.example.com/group/proj") because repoNameFromPath returned
+// the same value as remoteRepo. Display now drops the host — migrate existing
+// entries when their first segment looks like a host.
+const migrateRepoName = (repo: RepoConfig): RepoConfig => {
+  const segments = repo.name.split("/");
+  if (segments.length >= 3 && segments[0].includes(".")) {
+    return { ...repo, name: segments.slice(1).join("/") };
+  }
+  return repo;
+};
+
 const migrateRepoSlug = (repo: RepoConfig): RepoConfig => {
   if (repo.provider !== "gitlab") return repo;
   if (!existsSync(repo.path)) return repo;
@@ -50,9 +64,17 @@ export const loadConfig = (): GlobalConfig => {
     const raw = readFileSync(configFile(), "utf8");
     const parsed = JSON.parse(raw);
     const cfg = validateConfig(parsed);
-    const migrated = { ...cfg, repos: cfg.repos.map(migrateRepoSlug) };
+    const migrated = {
+      ...cfg,
+      repos: cfg.repos.map(migrateRepoSlug).map(migrateRepoName),
+    };
     if (JSON.stringify(migrated) !== JSON.stringify(cfg)) {
       saveConfig(migrated);
+    }
+    try {
+      sweepOrphanWorktrees(migrated.repos);
+    } catch (err) {
+      console.error(`[yggdrasil] orphan worktree sweep failed: ${err}`);
     }
     return migrated;
   } catch (err) {
@@ -81,6 +103,10 @@ const validateConfig = (raw: any): GlobalConfig => {
   cfg.notifications =
     typeof cfg.notifications === "boolean" ? cfg.notifications : true;
   cfg.profile = cfg.profile ? String(cfg.profile) : null;
+  cfg.maxIssuesPerRepo = Math.max(
+    50,
+    Math.min(2000, Number(cfg.maxIssuesPerRepo) || 200),
+  );
   cfg.repos = cfg.repos.map(normalizeRepo);
   return cfg;
 };
