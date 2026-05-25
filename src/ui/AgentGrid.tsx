@@ -44,7 +44,7 @@ const Card: React.FC<{ a: Agent; selected: boolean; width: number }> = ({ a, sel
     width={width}
   >
     <Box justifyContent="space-between">
-      <Text bold wrap="truncate-end">#{a.issueId} {truncate(a.issueTitle, 28)}</Text>
+      <Text bold wrap="truncate-end">{a.kind === "mr" ? "!" : "#"}{a.issueId} {truncate(a.issueTitle, 28)}</Text>
       <Text color={colorFor(a.status)}>
         {a.status}
         {a.totalSteps && a.currentStep != null

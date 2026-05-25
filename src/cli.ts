@@ -22,7 +22,7 @@ import {
 } from "./profile";
 import { hasBin, glabAuthOk, ghAuthOk } from "./doctor";
 
-const VERSION = "1.3.0";
+const VERSION = "1.4.0";
 
 const printHelp = (): void => {
   console.log(`Yggdrasil ${VERSION} — TUI multi-agent dashboard
@@ -44,6 +44,9 @@ Usage:
                                        --disallow-tool TOOL     (repeatable; replaces denylist)
                                        --settings PATH|none     (claude settings JSON)
                                        --profile NAME|none|reset (pipeline profile)
+                                       --auto-spawn-mr-label NAME   enable MR review auto-spawn
+                                       --no-auto-spawn-mr-label     disable MR auto-spawn
+                                       --mr-review-inline true|false default inline-comments for mr-review
                                        --reset-tools            (clear repo override → inherit global)
   ygg repo rm <name>                 remove repo by name
   ygg config show                    print global defaults
@@ -364,6 +367,8 @@ const cmdRepoAdd = (rawArgs: string[]): number => {
     remoteRepo,
     autoSpawn: existing?.autoSpawn ?? false,
     autoSpawnLabel: labelArg ? label : existing?.autoSpawnLabel ?? label,
+    autoSpawnMrLabel: existing?.autoSpawnMrLabel ?? null,
+    mrReviewInlineDefault: existing?.mrReviewInlineDefault ?? false,
     permissionMode: existing?.permissionMode ?? null,
     defaultMode: existing?.defaultMode ?? null,
     claudeConfigDir: claudeDirArg ? claudeConfigDir : existing?.claudeConfigDir ?? null,
@@ -398,6 +403,7 @@ const cmdRepoList = (): number => {
     console.log(`    provider: ${r.provider}`);
     console.log(`    remote:   ${r.remoteRepo}`);
     console.log(`    auto:     ${r.autoSpawn ? "on" : "off"} · label: ${r.autoSpawnLabel}`);
+    console.log(`    mr-auto:  ${r.autoSpawnMrLabel ?? "(off)"}${r.mrReviewInlineDefault ? " · inline:on" : ""}`);
     console.log(`    perm:     ${r.permissionMode || "(global)"}`);
     console.log(`    mode:     ${r.defaultMode || "(global)"}`);
     console.log(`    claude:   ${r.claudeConfigDir || "(default ~/.claude)"}`);
@@ -443,7 +449,7 @@ const cmdRepoSet = (rawArgs: string[]): number => {
   const name = args.shift();
   if (!name) {
     console.error(
-      "usage: ygg repo set <name> [--claude-dir PATH|none] [--label NAME] [--permission-mode MODE] [--default-mode mr|review|dry]",
+      "usage: ygg repo set <name> [--claude-dir PATH|none] [--label NAME] [--auto-spawn-mr-label NAME|--no-auto-spawn-mr-label] [--mr-review-inline true|false] [--permission-mode MODE] [--default-mode mr|review|dry]",
     );
     return 1;
   }
@@ -471,6 +477,25 @@ const cmdRepoSet = (rawArgs: string[]): number => {
 
   const labelArg = pop("--label");
   if (labelArg !== undefined) next.autoSpawnLabel = labelArg;
+
+  const mrLabelArg = pop("--auto-spawn-mr-label");
+  const clearMrLabel = popBool("--no-auto-spawn-mr-label");
+  if (clearMrLabel) next.autoSpawnMrLabel = null;
+  else if (mrLabelArg !== undefined) {
+    next.autoSpawnMrLabel = mrLabelArg === "" ? null : mrLabelArg;
+  }
+
+  const mrInlineArg = pop("--mr-review-inline");
+  if (mrInlineArg !== undefined) {
+    if (mrInlineArg === "true" || mrInlineArg === "on" || mrInlineArg === "1") {
+      next.mrReviewInlineDefault = true;
+    } else if (mrInlineArg === "false" || mrInlineArg === "off" || mrInlineArg === "0") {
+      next.mrReviewInlineDefault = false;
+    } else {
+      console.error(`invalid --mr-review-inline: ${mrInlineArg} (use true|false)`);
+      return 1;
+    }
+  }
 
   const permArg = pop("--permission-mode");
   if (permArg !== undefined) {

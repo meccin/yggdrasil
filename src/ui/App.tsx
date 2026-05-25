@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { Box, Text, useApp, useInput, useStdout } from "ink";
 import { Header } from "./Header";
 import { RepoBar } from "./RepoBar";
-import { IssueList, matchesIssueFilter } from "./IssueList";
+import { IssueList, matchesItemFilter, type ListTab } from "./IssueList";
 import { AgentGrid } from "./AgentGrid";
 import { LogPane, type LogFilter, LOG_FILTER_ORDER } from "./LogPane";
 import { DiffPane } from "./DiffPane";
@@ -10,9 +10,10 @@ import { SpawnModal } from "./SpawnModal";
 import { HelpModal } from "./HelpModal";
 import { getState, useStore, useStoreShallow } from "./useStore";
 import type { FinalizeMode } from "../types";
-import type { Issue } from "../sources/types";
+import type { Issue, MergeRequest } from "../sources/types";
 import {
   spawnAgentForIssue,
+  spawnAgentForMr,
   killAgentById,
   deleteAgentArtifacts,
   respawnFailedAgent,
@@ -31,7 +32,7 @@ const PANE_ORDER: Pane[] = ["repos", "issues", "agents", "log"];
 const footerHints = (
   agent: { status: string; mrUrl?: string; worktreePath?: string } | undefined,
   pane: Pane,
-  hasIssueUrl: boolean,
+  hasItemUrl: boolean,
 ): string => {
   const parts: string[] = ["tab:focus", "enter:spawn"];
   if (agent) {
@@ -43,9 +44,9 @@ const footerHints = (
     parts.push("l:log", "v:diff");
     if (agent.worktreePath) parts.push("e:editor");
   }
-  if (pane === "issues" && hasIssueUrl) parts.push("o:open");
+  if (pane === "issues" && hasItemUrl) parts.push("o:open");
   if (pane === "agents" && agent?.mrUrl) parts.push("o:open MR");
-  if (pane === "issues") parts.push("/:find");
+  if (pane === "issues") parts.push("/:find", "i/m:tab");
   if (pane === "log") parts.push("f:filter");
   parts.push("a:auto", "p:poll", "+/-:conc", "?:help", "q:quit");
   return parts.join(" · ");
@@ -57,9 +58,11 @@ export const App: React.FC = () => {
   const repos = useStoreShallow((s) => s.config.repos);
   const agentMap = useStoreShallow((s) => s.agents);
   const issuesByRepo = useStoreShallow((s) => s.issuesByRepo);
+  const mrsByRepo = useStoreShallow((s) => s.mrsByRepo);
   const cfg = useStore((s) => s.config);
 
-  const [modal, setModal] = useState<null | { issue: Issue }>(null);
+  const [listTab, setListTab] = useState<ListTab>("issues");
+  const [modal, setModal] = useState<null | { issue?: Issue; mr?: MergeRequest }>(null);
   const [fullLog, setFullLog] = useState(false);
   const [fullDiff, setFullDiff] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
@@ -105,10 +108,10 @@ export const App: React.FC = () => {
     setLogTopIdx(null);
   }, [focus.agentIdx]);
 
-  // Filter changes invalidate issueIdx — snap back to top of visible list.
+  // Filter or tab change invalidates issueIdx — snap back to top of list.
   useEffect(() => {
     getState().setFocus({ issueIdx: 0 });
-  }, [issueFilter]);
+  }, [issueFilter, listTab]);
 
   const showFlash = (msg: string) => {
     setFlash(msg);
@@ -133,16 +136,35 @@ export const App: React.FC = () => {
     const r = currentRepo();
     if (!r) return [];
     const all = issuesByRepo[r.name] || [];
-    return all.filter((i) => matchesIssueFilter(i, issueFilter));
+    return all.filter((i) => matchesItemFilter(i, issueFilter));
+  };
+  const currentMrs = (): MergeRequest[] => {
+    const r = currentRepo();
+    if (!r) return [];
+    const all = mrsByRepo[r.name] || [];
+    return all.filter((m) => matchesItemFilter(m, issueFilter));
   };
   const currentIssue = () => currentIssues()[focus.issueIdx];
+  const currentMr = () => currentMrs()[focus.issueIdx];
+  const currentItemUrl = (): string | undefined =>
+    listTab === "mrs" ? currentMr()?.web_url : currentIssue()?.web_url;
   const currentAgent = () => sortedAgents[focus.agentIdx];
 
   const startSpawn = (mode: FinalizeMode) => {
     if (!modal) return;
     const repo = currentRepo();
     if (!repo) return;
+    if (modal.mr) {
+      const mr = modal.mr;
+      setModal(null);
+      spawnAgentForMr(repo, mr).then((res) => {
+        if (!res.ok) showFlash(`spawn failed: ${res.error}`);
+        else showFlash(`review agent launched · !${mr.iid}`);
+      });
+      return;
+    }
     const issue = modal.issue;
+    if (!issue) return;
     setModal(null);
     spawnAgentForIssue(repo, issue, mode).then((res) => {
       if (!res.ok) showFlash(`spawn failed: ${res.error}`);
@@ -184,6 +206,10 @@ export const App: React.FC = () => {
 
     if (modal) {
       if (key.escape) return setModal(null);
+      if (modal.mr) {
+        if (input === "r" || key.return) return startSpawn("mr-review");
+        return;
+      }
       if (input === "m") return startSpawn("mr");
       if (input === "r") return startSpawn("review");
       if (input === "d") return startSpawn("dry");
@@ -314,7 +340,7 @@ export const App: React.FC = () => {
         const next = (focus.repoIdx + delta + repos.length) % repos.length;
         getState().setFocus({ repoIdx: next, issueIdx: 0 });
       } else if (focus.pane === "issues") {
-        const arr = currentIssues();
+        const arr = listTab === "mrs" ? currentMrs() : currentIssues();
         if (arr.length === 0) return;
         const next = (focus.issueIdx + delta + arr.length) % arr.length;
         getState().setFocus({ issueIdx: next });
@@ -356,8 +382,14 @@ export const App: React.FC = () => {
 
     if (key.return) {
       if (focus.pane === "issues") {
-        const issue = currentIssue();
         const repo = currentRepo();
+        if (listTab === "mrs") {
+          const mr = currentMr();
+          if (mr && repo) setModal({ mr });
+          else showFlash("no MR/repo selected");
+          return;
+        }
+        const issue = currentIssue();
         if (issue && repo) setModal({ issue });
         else showFlash("no issue/repo selected");
       }
@@ -367,6 +399,18 @@ export const App: React.FC = () => {
     switch (input) {
       case "/":
         if (focus.pane === "issues") setIssueFilterMode(true);
+        return;
+      case "i":
+        if (focus.pane === "issues" && listTab !== "issues") {
+          setListTab("issues");
+          setIssueFilter("");
+        }
+        return;
+      case "m":
+        if (focus.pane === "issues" && listTab !== "mrs") {
+          setListTab("mrs");
+          setIssueFilter("");
+        }
         return;
       case "?":
         setHelpOpen(true);
@@ -456,6 +500,20 @@ export const App: React.FC = () => {
         return;
       case "o": {
         if (focus.pane === "issues") {
+          if (listTab === "mrs") {
+            const mr = currentMr();
+            if (!mr) {
+              showFlash("no MR selected");
+              return;
+            }
+            if (!mr.web_url) {
+              showFlash("no url for this MR");
+              return;
+            }
+            openUrl(mr.web_url);
+            showFlash(`opened !${mr.iid}`);
+            return;
+          }
           const issue = currentIssue();
           if (!issue) {
             showFlash("no issue selected");
@@ -541,7 +599,7 @@ export const App: React.FC = () => {
       <RepoBar />
       <Box flexDirection="column" flexGrow={1}>
         <Box>
-          <IssueList filter={issueFilter} filterMode={issueFilterMode} />
+          <IssueList tab={listTab} filter={issueFilter} filterMode={issueFilterMode} />
           <AgentGrid />
         </Box>
         <Box flexGrow={1}>
@@ -549,7 +607,7 @@ export const App: React.FC = () => {
         </Box>
       </Box>
       <Box paddingX={1} borderStyle="single" borderColor="gray">
-        <Text dimColor>{footerHints(currentAgent(), focus.pane, !!currentIssue()?.web_url)}</Text>
+        <Text dimColor>{footerHints(currentAgent(), focus.pane, !!currentItemUrl())}</Text>
       </Box>
       {flash && (
         <Box paddingX={1}>
@@ -572,6 +630,7 @@ export const App: React.FC = () => {
         <SpawnModal
           repo={currentRepo()!}
           issue={modal.issue}
+          mr={modal.mr}
           defaultMode={resolveMode(cfg, currentRepo()!)}
         />
       )}

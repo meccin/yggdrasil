@@ -1,6 +1,6 @@
-import type { Provider, Issue } from "./sources/types";
+import type { Provider, Issue, MergeRequest } from "./sources/types";
 
-export type { Provider, Issue };
+export type { Provider, Issue, MergeRequest };
 
 export type PermissionMode =
   | "acceptEdits"
@@ -10,7 +10,9 @@ export type PermissionMode =
   | "dontAsk"
   | "plan";
 
-export type FinalizeMode = "mr" | "review" | "dry";
+export type FinalizeMode = "mr" | "review" | "dry" | "mr-review";
+
+export type AgentKind = "issue" | "mr";
 
 export interface RepoConfig {
   name: string;
@@ -19,6 +21,13 @@ export interface RepoConfig {
   remoteRepo: string;
   autoSpawn: boolean;
   autoSpawnLabel: string;
+  // Optional label on MRs that triggers auto-spawn of a review agent. null
+  // disables MR auto-spawn for this repo.
+  autoSpawnMrLabel: string | null;
+  // Whether MR-review agents should also emit inline comments by default.
+  // Phase 5 feature; in V1 the runner accepts the flag but inline posting is
+  // parked behind a separate code path.
+  mrReviewInlineDefault: boolean;
   permissionMode: PermissionMode | null;
   defaultMode: FinalizeMode | null;
   // Optional path to a Claude Code config dir (CLAUDE_CONFIG_DIR). Lets you
@@ -84,6 +93,10 @@ export interface AgentEvent {
 export interface Agent {
   id: string;
   repoName: string;
+  // What this agent is working on. Defaults to "issue" for legacy persisted
+  // agents at hydrate time. When "mr", issueId carries the MR iid and mrIid
+  // mirrors it for clarity.
+  kind: AgentKind;
   issueId: number;
   issueTitle: string;
   branch: string;
@@ -100,6 +113,11 @@ export interface Agent {
   log: AgentEvent[];
   errorMessage?: string;
   mrUrl?: string;
+  // Set only when kind === "mr". Source branch of the MR being reviewed,
+  // captured at spawn for traceability.
+  mrIid?: number;
+  mrSourceBranch?: string;
+  mrReviewInline?: boolean;
   // Set when the agent is running a profile pipeline. 0-based index of the
   // step currently executing (or just finished). undefined for classic runs
   // and terminal agents whose final state wasn't captured before the field

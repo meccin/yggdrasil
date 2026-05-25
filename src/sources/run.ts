@@ -14,6 +14,7 @@ export interface RunOpts {
   // reports failure, so retrying risks duplication.
   retries?: number;
   baseBackoffMs?: number;
+  env?: Record<string, string>;
 }
 
 const TRANSIENT_PATTERNS: RegExp[] = [
@@ -48,8 +49,9 @@ export const run = (bin: string, args: string[], opts: RunOpts = {}): RunResult 
   const attempts = Math.max(1, opts.retries ?? 1);
   const base = opts.baseBackoffMs ?? 500;
   let last: RunResult = { ok: false, stdout: "", stderr: "" };
+  const env = opts.env ? { ...process.env, ...opts.env } : undefined;
   for (let i = 0; i < attempts; i++) {
-    const r = spawnSync(bin, args, { cwd: opts.cwd, encoding: "utf8" });
+    const r = spawnSync(bin, args, { cwd: opts.cwd, encoding: "utf8", env });
     last = { ok: r.status === 0, stdout: r.stdout || "", stderr: r.stderr || "" };
     if (last.ok) return last;
     if (!isTransientError(last.stderr)) return last;

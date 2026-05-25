@@ -124,6 +124,8 @@ const normalizeRepo = (r: any): RepoConfig => {
     remoteRepo: String(remoteRepo),
     autoSpawn: Boolean(r.autoSpawn),
     autoSpawnLabel: String(r.autoSpawnLabel || "agent-ready"),
+    autoSpawnMrLabel: r.autoSpawnMrLabel ? String(r.autoSpawnMrLabel) : null,
+    mrReviewInlineDefault: Boolean(r.mrReviewInlineDefault),
     permissionMode: r.permissionMode || null,
     defaultMode: r.defaultMode || null,
     claudeConfigDir: r.claudeConfigDir ? String(r.claudeConfigDir) : null,

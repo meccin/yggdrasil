@@ -22,6 +22,9 @@ export const RepoBar: React.FC = () => {
             </Text>
             {sel && <Text dimColor> [{r.provider}]</Text>}
             {sel && r.autoSpawn && <Text color="green"> [auto:{r.autoSpawnLabel}]</Text>}
+            {sel && r.autoSpawnMrLabel && (
+              <Text color="magenta"> [mr-auto:{r.autoSpawnMrLabel}]</Text>
+            )}
             <Text dimColor>  </Text>
           </React.Fragment>
         );

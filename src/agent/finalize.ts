@@ -2,10 +2,13 @@ import type { Agent, AgentEvent, FinalizeMode, RepoConfig, Provider } from "../t
 import { store } from "../store";
 import { hasAnyCommits, hasUncommittedChanges, pushBranch, runGit } from "../git";
 import { getSource } from "../sources";
+import { removeWorktree } from "./worktree";
 
 const now = () => Date.now();
 const log = (id: string, text: string) =>
   store.getState().appendEvent(id, { ts: now(), kind: "system", text });
+
+const VERDICT_LINE = /^\s*VERDICT:\s*(approve|request-changes|comment)/im;
 
 export const finalize = async (
   agent: Agent,
@@ -23,6 +26,34 @@ export const finalize = async (
   if (mode === "review") {
     log(agent.id, "finalize: review — worktree preserved for inspection");
     upd.setStatus(agent.id, "awaiting-review");
+    return;
+  }
+
+  if (mode === "mr-review") {
+    const mrIid = agent.mrIid ?? agent.issueId;
+    const summary = extractSummary(agent);
+    if (!summary) {
+      log(agent.id, "finalize: mr-review — no summary produced; marking failed");
+      upd.updateAgent(agent.id, { errorMessage: "agent produced no review output" });
+      upd.setStatus(agent.id, "failed");
+      cleanupMrWorktree(agent, repo);
+      return;
+    }
+    const verdictMatch = summary.match(VERDICT_LINE);
+    const verdict = verdictMatch ? verdictMatch[1].toLowerCase() : "comment";
+    log(agent.id, `finalize: mr-review verdict=${verdict}`);
+    const source = getSource(repo.provider);
+    const posted = source.commentMr(repo.remoteRepo, mrIid, summary);
+    if (!posted) {
+      log(agent.id, "finalize: mr-review — commentMr failed");
+      upd.updateAgent(agent.id, { errorMessage: "failed to post review comment" });
+      upd.setStatus(agent.id, "failed");
+      cleanupMrWorktree(agent, repo);
+      return;
+    }
+    log(agent.id, `finalize: review comment posted on !${mrIid}`);
+    upd.setStatus(agent.id, "done");
+    cleanupMrWorktree(agent, repo);
     return;
   }
 
@@ -119,6 +150,17 @@ export const finalize = async (
 };
 
 const defaultTitle = (a: Agent) => `[agent] ${a.issueTitle} (#${a.issueId})`;
+
+// MR-review agents may carry a local branch (glab creates `mr-review-<iid>`;
+// gh uses detached HEAD with an empty branch string). The removeWorktree
+// helper guards against empty branch names so this is safe in both cases.
+const cleanupMrWorktree = (agent: Agent, repo: RepoConfig): void => {
+  try {
+    removeWorktree(repo.path, agent.worktreePath, agent.branch, { deleteBranch: true });
+  } catch (err) {
+    log(agent.id, `cleanup: worktree remove failed: ${(err as Error).message}`);
+  }
+};
 
 export const extractSummary = (agent: Agent): string => {
   const texts = agent.log

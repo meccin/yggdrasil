@@ -17,6 +17,11 @@ export const worktreeFor = (repoName: string, issueId: number): string => {
   return join(worktreesRoot(), slug, `issue-${issueId}`);
 };
 
+export const worktreeForMr = (repoName: string, mrIid: number): string => {
+  const slug = repoName.replace(/[^a-zA-Z0-9_-]+/g, "-");
+  return join(worktreesRoot(), slug, `mr-${mrIid}`);
+};
+
 export const logFile = (agentId: string): string =>
   join(logsRoot(), `${agentId}.ndjson`);
 

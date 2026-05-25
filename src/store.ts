@@ -7,6 +7,7 @@ import type {
   AgentStatus,
   GlobalConfig,
   Issue,
+  MergeRequest,
 } from "./types";
 import { loadConfig, saveConfig } from "./config";
 
@@ -21,12 +22,14 @@ interface State {
   config: GlobalConfig;
   agents: Record<string, Agent>;
   issuesByRepo: Record<string, Issue[]>;
+  mrsByRepo: Record<string, MergeRequest[]>;
   focus: Focus;
   totalInTokens: number;
   totalOutTokens: number;
   nextPollAt?: number;
   setConfig: (cfg: GlobalConfig) => void;
   setIssues: (repoName: string, issues: Issue[]) => void;
+  setMrs: (repoName: string, mrs: MergeRequest[]) => void;
   addAgent: (a: Agent) => void;
   updateAgent: (id: string, patch: Partial<Agent>) => void;
   appendEvent: (id: string, ev: AgentEvent) => void;
@@ -51,6 +54,7 @@ export const store = createStore<State>((set, get) => ({
   config: loadConfig(),
   agents: {},
   issuesByRepo: {},
+  mrsByRepo: {},
   focus: { pane: "repos", repoIdx: 0, issueIdx: 0, agentIdx: 0 },
   totalInTokens: 0,
   totalOutTokens: 0,
@@ -61,6 +65,8 @@ export const store = createStore<State>((set, get) => ({
   },
   setIssues: (repoName, issues) =>
     set((s) => ({ issuesByRepo: { ...s.issuesByRepo, [repoName]: issues } })),
+  setMrs: (repoName, mrs) =>
+    set((s) => ({ mrsByRepo: { ...s.mrsByRepo, [repoName]: mrs } })),
   addAgent: (a) => set((s) => ({ agents: { ...s.agents, [a.id]: a } })),
   updateAgent: (id, patch) =>
     set((s) => {
@@ -151,7 +157,7 @@ export const persistState = (): void => {
 // `failed` so the user can see what happened, and any reviewable agent whose
 // worktree has been removed from disk loses its claim to that status.
 const reconcileHydratedAgent = (a: Agent): Agent => {
-  let next: Agent = { ...a, log: a.log || [] };
+  let next: Agent = { ...a, log: a.log || [], kind: a.kind || "issue" };
   if (next.status === "running" || next.status === "queued") {
     next = {
       ...next,

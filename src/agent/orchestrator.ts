@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs";
 import { randomUUID } from "node:crypto";
 import type { Agent, FinalizeMode, RepoConfig } from "../types";
-import type { Issue } from "../sources/types";
+import type { Issue, MergeRequest } from "../sources/types";
 import { store } from "../store";
 import {
   resolveAllowedTools,
@@ -11,13 +11,22 @@ import {
   resolveProfileName,
   resolveSettingsPath,
 } from "../config";
-import { addWorktree, isValidWorktree, removeWorktree } from "./worktree";
-import { buildPrompt, killAgent, spawnAgent } from "./runner";
+import {
+  addReadOnlyWorktreeForMr,
+  addWorktree,
+  isValidWorktree,
+  removeWorktree,
+} from "./worktree";
+import { buildMrReviewPrompt, buildPrompt, killAgent, spawnAgent } from "./runner";
 import { finalize } from "./finalize";
 import { getSource } from "../sources";
 import { recordMetric } from "../metrics";
 import { notify } from "../notify";
 import { interpolate, type Profile, type ProfileStep } from "../profile";
+
+// Tools blocked in MR-review mode so the agent can read but never edit. Layered
+// on top of the user's configured disallowedTools.
+const MR_REVIEW_BLOCK = ["Edit", "Write", "NotebookEdit"];
 
 const maybeNotify = (
   repo: RepoConfig,
@@ -26,7 +35,8 @@ const maybeNotify = (
 ): void => {
   if (!store.getState().config.notifications) return;
   const title = `Yggdrasil · ${repo.name}`;
-  const body = `#${agent.issueId} ${agent.issueTitle} — ${status}`;
+  const glyph = agent.kind === "mr" ? "!" : "#";
+  const body = `${glyph}${agent.issueId} ${agent.issueTitle} — ${status}`;
   notify(title, body);
 };
 
@@ -277,6 +287,7 @@ export const spawnAgentForIssue = async (
   const dup = Object.values(state.agents).find(
     (a) =>
       a.repoName === repo.name &&
+      a.kind === "issue" &&
       a.issueId === issue.iid &&
       ["queued", "running"].includes(a.status),
   );
@@ -293,6 +304,7 @@ export const spawnAgentForIssue = async (
   const agent: Agent = {
     id,
     repoName: repo.name,
+    kind: "issue",
     issueId: issue.iid,
     issueTitle: issue.title,
     branch: wt.branch,
@@ -326,6 +338,133 @@ export const spawnAgentForIssue = async (
   return { ok: true, agentId: id };
 };
 
+// MR-review single-shot: read-only worktree at MR head, claude posts a summary
+// review comment, no branch is created or pushed. Profile pipelines are not
+// supported for MR-review in V1 — always classic single-shot.
+export const spawnAgentForMr = async (
+  repo: RepoConfig,
+  mr: MergeRequest,
+  opts: { inline?: boolean } = {},
+): Promise<{ ok: boolean; agentId?: string; error?: string }> => {
+  const state = store.getState();
+  const dup = Object.values(state.agents).find(
+    (a) =>
+      a.repoName === repo.name &&
+      a.kind === "mr" &&
+      a.issueId === mr.iid &&
+      ["queued", "running"].includes(a.status),
+  );
+  if (dup) return { ok: false, error: `agent already active (${dup.id.slice(0, 8)})` };
+
+  let wt;
+  try {
+    wt = addReadOnlyWorktreeForMr(repo.name, repo.path, repo.provider, mr.iid, repo.remoteRepo);
+  } catch (err) {
+    return { ok: false, error: (err as Error).message };
+  }
+
+  const source = getSource(repo.provider);
+  const diff = source.getMrDiff(repo.remoteRepo, mr.iid);
+  const inline = opts.inline ?? repo.mrReviewInlineDefault ?? false;
+  const prompt = buildMrReviewPrompt(
+    {
+      iid: mr.iid,
+      title: mr.title,
+      description: mr.description,
+      source_branch: mr.source_branch,
+      target_branch: mr.target_branch,
+      web_url: mr.web_url,
+    },
+    diff,
+    inline,
+  );
+
+  const id = randomUUID();
+  const agent: Agent = {
+    id,
+    repoName: repo.name,
+    kind: "mr",
+    issueId: mr.iid,
+    issueTitle: mr.title,
+    branch: wt.branch,
+    worktreePath: wt.path,
+    mode: "mr-review",
+    status: "queued",
+    startedAt: now(),
+    inputTokens: 0,
+    outputTokens: 0,
+    mrIid: mr.iid,
+    mrSourceBranch: mr.source_branch,
+    mrReviewInline: inline,
+    mrUrl: mr.web_url,
+    log: [
+      {
+        ts: now(),
+        kind: "system",
+        text: `mr-review worktree: ${wt.path} · !${mr.iid} · inline:${inline}`,
+      },
+    ],
+  };
+  store.getState().addAgent(agent);
+
+  recordMetric({
+    ts: now(),
+    kind: "agent_start",
+    agentId: id,
+    repo: repo.name,
+    issueId: mr.iid,
+    mode: "mr-review",
+  });
+
+  const cfg = state.config;
+  const permissionMode = resolvePermissionMode(cfg, repo);
+  const allowedTools = resolveAllowedTools(cfg, repo);
+  const disallowedTools = [
+    ...new Set([...(resolveDisallowedTools(cfg, repo) || []), ...MR_REVIEW_BLOCK]),
+  ];
+  const settingsPath = resolveSettingsPath(cfg, repo);
+
+  spawnAgent({
+    agent,
+    prompt,
+    permissionMode,
+    claudeConfigDir: repo.claudeConfigDir,
+    allowedTools,
+    disallowedTools,
+    settingsPath,
+    onExit: async (code) => {
+      const cur = store.getState().agents[id];
+      if (!cur) return;
+      if (cur.status === "killed") {
+        finishMetric(agent, repo, "killed");
+        maybeNotify(repo, agent, "killed");
+        return;
+      }
+      if (code !== 0) {
+        store.getState().updateAgent(id, { errorMessage: `claude exit ${code}` });
+        store.getState().setStatus(id, "failed");
+        finishMetric(agent, repo, "failed", `claude exit ${code}`);
+        maybeNotify(repo, agent, "failed");
+        return;
+      }
+      try {
+        await finalize(cur, repo, "mr-review");
+        const final = store.getState().agents[id];
+        const status = final?.status || "done";
+        finishMetric(agent, repo, status, final?.errorMessage);
+        maybeNotify(repo, agent, status);
+      } catch (err) {
+        store.getState().updateAgent(id, { errorMessage: (err as Error).message });
+        store.getState().setStatus(id, "failed");
+        finishMetric(agent, repo, "failed", (err as Error).message);
+        maybeNotify(repo, agent, "failed");
+      }
+    },
+  });
+
+  return { ok: true, agentId: id };
+};
+
 // Re-spawn a previously-failed/killed/dry agent without losing its worktree,
 // branch, or accumulated commits. The agent record is mutated in place
 // (same id) so the user keeps the agent card and log history; new run is
@@ -346,10 +485,21 @@ export const respawnFailedAgent = async (
     };
   }
 
+  // Re-spawn only handles classic issue agents — MR-review agents have no
+  // branch to preserve, so re-running is identical to a fresh spawn from the
+  // MRs tab. Block here to avoid recreating the wrong (issue-shaped) worktree.
+  if (agent.kind === "mr") {
+    return {
+      ok: false,
+      error: "re-spawn unsupported for MR review — spawn a new one from the MRs tab",
+    };
+  }
+
   const dup = Object.values(s.agents).find(
     (a) =>
       a.id !== id &&
       a.repoName === agent.repoName &&
+      a.kind === agent.kind &&
       a.issueId === agent.issueId &&
       ["queued", "running"].includes(a.status),
   );
@@ -436,6 +586,8 @@ export const deleteAgentArtifacts = (id: string, deleteBranch = true): void => {
   const repo = s.config.repos.find((r) => r.name === agent.repoName);
   if (repo) {
     try {
+      // removeWorktree skips `git branch -D` when branch is empty, so MR-review
+      // agents on detached HEAD (gh) are safe with deleteBranch=true.
       removeWorktree(repo.path, agent.worktreePath, agent.branch, { deleteBranch });
     } catch {}
   }

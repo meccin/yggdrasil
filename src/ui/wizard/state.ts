@@ -120,6 +120,8 @@ export const toRepoConfig = (state: WizardState): RepoConfig => {
     remoteRepo: state.detected.repo,
     autoSpawn: false,
     autoSpawnLabel: state.label.trim() || "agent-ready",
+    autoSpawnMrLabel: null,
+    mrReviewInlineDefault: false,
     permissionMode: preset.permissionMode,
     defaultMode: state.mode,
     claudeConfigDir: null,

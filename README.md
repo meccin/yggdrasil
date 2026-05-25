@@ -172,6 +172,7 @@ User data (created on first run):
 - **mr**: push branch, open PR/MR (`glab mr create` or `gh pr create`), comment back on the issue. If the branch already exists upstream, push new commits and comment with the existing PR/MR.
 - **review**: pause inside the worktree for you to inspect.
 - **dry**: no external action.
+- **mr-review**: review an existing MR/PR — post a single summary comment with a `VERDICT: approve | request-changes | comment` header. Agent runs read-only (Edit/Write/NotebookEdit blocked), worktree is torn down on success. Selected automatically when spawning from the **MRs** sub-tab.
 
 Configurable per agent at spawn time (modal) and as a per-repo default (`defaultMode`).
 
@@ -181,6 +182,26 @@ After `mr` finalizes, the issue gets a comment containing the agent's final
 summary plus a link to the PR/MR. Yggdrasil instructs the agent to write that
 summary **in the same language as the issue description**, so localized issues
 get localized replies without configuration.
+
+### MR/PR review (`mr-review`)
+
+The left pane has two sub-tabs: `Issues(N) | MRs(M)`. Press `i` / `m` to switch
+when the issues pane is focused.
+
+Spawning an agent from the MRs tab (Enter → `r`) creates a read-only worktree
+checked out at the MR's head (uses `gh pr checkout --detach` or
+`glab mr checkout -b mr-review-<iid>` **inside the new worktree** so the main
+repo's HEAD never moves; forks work). The agent reads the diff, browses the
+worktree for context, and outputs a single summary comment with a
+`VERDICT:` line. Yggdrasil posts that comment via `gh pr comment` /
+`glab mr note`, marks the agent `done`, and cleans up the worktree.
+
+Tools are restricted: `Read`, `Glob`, `Grep`, `Bash` are allowed; `Edit`,
+`Write`, `NotebookEdit` are blocked even if your global allowlist enables
+them.
+
+Re-spawn (`R`) is not supported for MR-review agents — spawn a fresh one from
+the MRs tab.
 
 ### Commit & PR/MR authorship
 
@@ -538,6 +559,21 @@ ygg repo set <name> --label my-custom-label
 Or set it at add time with `ygg repo add --label NAME`. Editing
 `~/.yggdrasil/config.json` directly also works (restart `ygg` afterward).
 
+### MR auto-spawn
+
+The same poller can review MRs/PRs automatically. Set a label per repo:
+
+```bash
+ygg repo set <name> --auto-spawn-mr-label needs-review
+ygg repo set <name> --no-auto-spawn-mr-label   # disable
+```
+
+When set, the repo bar shows `[mr-auto:LABEL]` (magenta). Each poll cycle the
+source lists open MRs carrying that label and spawns one `mr-review` agent per
+new MR (skipping those that already have a `queued` / `running` / `done`
+MR-review agent for the same iid). Issue auto-spawn and MR auto-spawn are
+independent — enabling one does not require the other.
+
 ## Metrics
 
 Each agent emits `agent_start`, `tool_use`, and `agent_end` events to
@@ -580,7 +616,8 @@ On every TUI start, persisted agents are reconciled before render:
 | `Tab`     | switch pane focus |
 | `↑/↓`     | navigate list — scrolls the log when the log pane is focused |
 | `←/→`     | navigate repos (when repos pane is focused) |
-| `Enter`   | spawn agent on selected issue |
+| `Enter`   | spawn agent on selected issue / MR |
+| `i` / `m` | switch list tab Issues ↔ MRs (in issues pane) |
 | `d`       | delete worktree of focused agent (confirms `y/n`) |
 | `k`       | kill process of focused agent |
 | `R`       | re-spawn focused failed/killed/dry agent (keeps worktree+branch) |
@@ -599,7 +636,8 @@ On every TUI start, persisted agents are reconciled before render:
 | `Ctrl+C`  | panic close (skips confirm, kills agents, restores screen) |
 
 At spawn time the `SpawnModal` accepts `m` (mr), `r` (review), `d` (dry),
-`Enter` (default), or `Esc` (cancel).
+`Enter` (default), or `Esc` (cancel). When spawning from the MRs tab the
+modal switches to MR-review: `r` (review) or `Enter` (default review).
 
 In the diff view (`v`): `↑/↓`, `PgUp/PgDn`, `g`/`G` scroll the same way as
 the log pane. `r` re-runs the git commands (handy when the agent commits

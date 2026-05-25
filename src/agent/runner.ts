@@ -262,6 +262,61 @@ export const killAllAgents = (): void => {
   for (const id of [...processes.keys()]) killAgent(id);
 };
 
+const MR_DIFF_CAP = 200_000;
+
+export interface MrReviewPromptInput {
+  iid: number;
+  title: string;
+  description?: string;
+  source_branch: string;
+  target_branch: string;
+  web_url?: string;
+}
+
+export const buildMrReviewPrompt = (
+  mr: MrReviewPromptInput,
+  diff: string,
+  inline: boolean,
+): string => {
+  const body = (mr.description || "").trim() || "(no description)";
+  const truncatedDiff =
+    diff.length > MR_DIFF_CAP
+      ? diff.slice(0, MR_DIFF_CAP) + `\n\n[diff truncated — ${diff.length - MR_DIFF_CAP} bytes omitted, use Bash + git to inspect more]`
+      : diff;
+
+  const lines = [
+    `You are a code reviewer working on merge request !${mr.iid}: ${mr.title}`,
+    "",
+    `Source branch: ${mr.source_branch}  →  target: ${mr.target_branch}`,
+    mr.web_url ? `URL: ${mr.web_url}` : "",
+    "",
+    "MR description:",
+    body,
+    "",
+    "Diff:",
+    "```diff",
+    truncatedDiff || "(empty diff)",
+    "```",
+    "",
+    "Guidelines:",
+    "- Read the diff above and browse the worktree (your cwd) for context.",
+    "- DO NOT modify any files. You have no write tools.",
+    "- Focus on correctness bugs, security issues, missing tests, and clearly broken logic. Skip nitpicks.",
+    "- Output ONE final assistant message with this exact shape:",
+    "  - First line: `VERDICT: approve` | `VERDICT: request-changes` | `VERDICT: comment`",
+    "  - Then a concise review summary in the same language as the MR description.",
+  ];
+  if (inline) {
+    lines.push(
+      "- After the summary, emit a fenced JSON block with inline comments:",
+      "  ```json",
+      `  [{"path": "src/foo.ts", "line": 42, "body": "comment text"}]`,
+      "  ```",
+    );
+  }
+  return lines.filter((l) => l !== null && l !== undefined).join("\n");
+};
+
 export const buildPrompt = (issueTitle: string, issueBody: string, iid: number): string => {
   const body = (issueBody || "").trim() || "(no description)";
   return [

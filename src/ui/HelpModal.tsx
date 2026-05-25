@@ -10,8 +10,9 @@ const NAVIGATION: Row[] = [
   { key: "Tab", label: "switch pane focus" },
   { key: "↑/↓", label: "navigate list (scrolls log when log pane is focused)" },
   { key: "←/→", label: "navigate repos (when repos pane is focused)" },
-  { key: "Enter", label: "spawn agent on selected issue" },
-  { key: "/", label: "filter issues (Enter keeps, Esc clears, #N matches iid)" },
+  { key: "Enter", label: "spawn agent on selected issue / MR" },
+  { key: "/", label: "filter items (Enter keeps, Esc clears, #N or !N matches iid)" },
+  { key: "i / m", label: "switch list tab Issues ↔ MRs (in issues pane)" },
 ];
 
 const AGENT: Row[] = [
@@ -62,6 +63,7 @@ const MODES: Row[] = [
   { key: "mr", label: "push branch + open PR/MR + comment on issue" },
   { key: "review", label: "pause inside worktree for inspection" },
   { key: "dry", label: "no external action" },
+  { key: "mr-review", label: "review an existing MR/PR — post summary comment (set automatically when spawning on the MRs tab)" },
 ];
 
 const STATUS: Array<{ name: string; color: string; desc: string }> = [

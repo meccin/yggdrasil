@@ -3,7 +3,7 @@ import { gitlabSource } from "./gitlab";
 import { githubSource } from "./github";
 import type { IssueSource, Provider } from "./types";
 
-export type { Issue, IssueSource, PrRef, Provider } from "./types";
+export type { Issue, IssueSource, MergeRequest, PrRef, Provider } from "./types";
 export { gitlabSource, githubSource };
 
 export const getSource = (provider: Provider): IssueSource =>
