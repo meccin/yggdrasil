@@ -589,6 +589,8 @@ On every TUI start, persisted agents are reconciled before render:
 | `PgUp`/`PgDn` | scroll log ±10 lines (in log pane) |
 | `g` / `G` | jump to top (oldest) / tail-follow (newest) in the log pane |
 | `f`       | cycle log filter: `all → no-thinking → tools → errors` |
+| `o`       | open in browser: issue url (issues pane) · MR/PR url (agents pane) · log `.ndjson` (fullscreen log) |
+| `e`       | open focused agent worktree in `$VISUAL` / `$EDITOR` (else system file manager) |
 | `a`       | toggle autoSpawn on focused repo |
 | `p`       | force a poll cycle now |
 | `+`/`-`   | adjust `maxConcurrent` (1–10) |

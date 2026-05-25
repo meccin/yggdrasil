@@ -27,6 +27,13 @@ const LOG: Row[] = [
   { key: "PgUp/PgDn", label: "scroll log by 10 lines (in log pane)" },
   { key: "g / G", label: "jump to top (oldest) / tail-follow (newest)" },
   { key: "f", label: "cycle filter: all → no-thinking → tools → errors" },
+  { key: "o", label: "(fullscreen) open log .ndjson with system default app" },
+];
+
+const OPEN: Row[] = [
+  { key: "o", label: "issues pane: open issue url in browser" },
+  { key: "o", label: "agents pane: open MR/PR url in browser (after finalize)" },
+  { key: "e", label: "open focused agent worktree in $VISUAL / $EDITOR (else Finder). Use VISUAL=code or cursor for GUI editor" },
 ];
 
 const SESSION: Row[] = [
@@ -79,6 +86,7 @@ export const HelpModal: React.FC = () => (
     <Text> </Text>
     <Section title="Navigation" rows={NAVIGATION} />
     <Section title="Agent control" rows={AGENT} />
+    <Section title="Open / external" rows={OPEN} />
     <Section title="Log pane" rows={LOG} />
     <Section title="Session" rows={SESSION} />
 

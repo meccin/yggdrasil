@@ -19,6 +19,8 @@ import {
 } from "../agent/orchestrator";
 import { forceTick } from "../auto/poller";
 import { resolveMode } from "../config";
+import { openUrl, openPath, openInEditor } from "../openers";
+import { logFile } from "../paths";
 
 type Pane = "repos" | "issues" | "agents" | "log";
 const PANE_ORDER: Pane[] = ["repos", "issues", "agents", "log"];
@@ -27,8 +29,9 @@ const PANE_ORDER: Pane[] = ["repos", "issues", "agents", "log"];
 // (kill/delete/re-spawn/log/diff) only show when they actually do something.
 // Reduces noise and keeps the line from wrapping on narrower terminals.
 const footerHints = (
-  agent: { status: string } | undefined,
+  agent: { status: string; mrUrl?: string; worktreePath?: string } | undefined,
   pane: Pane,
+  hasIssueUrl: boolean,
 ): string => {
   const parts: string[] = ["tab:focus", "enter:spawn"];
   if (agent) {
@@ -38,7 +41,10 @@ const footerHints = (
       parts.push("R:re-spawn");
     }
     parts.push("l:log", "v:diff");
+    if (agent.worktreePath) parts.push("e:editor");
   }
+  if (pane === "issues" && hasIssueUrl) parts.push("o:open");
+  if (pane === "agents" && agent?.mrUrl) parts.push("o:open MR");
   if (pane === "issues") parts.push("/:find");
   if (pane === "log") parts.push("f:filter");
   parts.push("a:auto", "p:poll", "+/-:conc", "?:help", "q:quit");
@@ -195,6 +201,17 @@ export const App: React.FC = () => {
       }
       if (input === "f") {
         cycleFilter();
+        return;
+      }
+      if (input === "o") {
+        const a = currentAgent();
+        if (!a) {
+          showFlash("no agent focused");
+          return;
+        }
+        const path = logFile(a.id);
+        openPath(path);
+        showFlash(`log: ${path}`);
         return;
       }
       if (input === "g") {
@@ -437,6 +454,51 @@ export const App: React.FC = () => {
       case "_":
         getState().bumpConcurrency(-1);
         return;
+      case "o": {
+        if (focus.pane === "issues") {
+          const issue = currentIssue();
+          if (!issue) {
+            showFlash("no issue selected");
+            return;
+          }
+          if (!issue.web_url) {
+            showFlash("no url for this issue");
+            return;
+          }
+          openUrl(issue.web_url);
+          showFlash(`opened #${issue.iid}`);
+          return;
+        }
+        if (focus.pane === "agents") {
+          const a = currentAgent();
+          if (!a) {
+            showFlash("no agent focused");
+            return;
+          }
+          if (!a.mrUrl) {
+            showFlash("no MR url yet");
+            return;
+          }
+          openUrl(a.mrUrl);
+          showFlash(`opened MR ${a.id.slice(0, 8)}`);
+          return;
+        }
+        return;
+      }
+      case "e": {
+        const a = currentAgent();
+        if (!a) {
+          showFlash("no agent focused");
+          return;
+        }
+        if (!a.worktreePath) {
+          showFlash("no worktree");
+          return;
+        }
+        openInEditor(a.worktreePath);
+        showFlash(`editor: ${a.worktreePath}`);
+        return;
+      }
     }
   });
 
@@ -455,7 +517,7 @@ export const App: React.FC = () => {
         <Header />
         <LogPane fullscreen topIdx={logTopIdx} filter={logFilter} />
         <Box paddingX={1}>
-          <Text dimColor>esc/l/q: back · ↑/↓ pageup/pagedown g/G: scroll · f: filter</Text>
+          <Text dimColor>esc/l/q: back · ↑/↓ pageup/pagedown g/G: scroll · f: filter · o: open file</Text>
         </Box>
       </Box>
     );
@@ -487,7 +549,7 @@ export const App: React.FC = () => {
         </Box>
       </Box>
       <Box paddingX={1} borderStyle="single" borderColor="gray">
-        <Text dimColor>{footerHints(currentAgent(), focus.pane)}</Text>
+        <Text dimColor>{footerHints(currentAgent(), focus.pane, !!currentIssue()?.web_url)}</Text>
       </Box>
       {flash && (
         <Box paddingX={1}>

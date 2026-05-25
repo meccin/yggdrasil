@@ -104,13 +104,23 @@ export const applyFilter = (events: AgentEvent[], filter: LogFilter): AgentEvent
   }
 };
 
-const fmtEvent = (de: DisplayEvent): string => {
+// Inline log pane's slice math (display.slice(top, top + lines)) assumes one
+// event = one row, so we truncate text/system there to keep that invariant.
+// Fullscreen has room to wrap and is the view users actually read — return
+// the full string and let Ink wrap it. PAUSED indicator still orients the user.
+const fmtEvent = (de: DisplayEvent, fullscreen = false): string => {
   const ev = de.ev;
   if (ev.kind === "tool") return `${ev.name}${ev.brief ? " · " + truncate(ev.brief, 90) : ""}`;
   if (ev.kind === "usage") return `${ev.inputTokens || 0}↑ / ${ev.outputTokens || 0}↓`;
   if (ev.kind === "done") return `done${ev.reason ? " · " + ev.reason : ""}${ev.ok === false ? " · ERROR" : ""}`;
-  if (ev.kind === "text") return truncate((ev.text || "").replace(/\s+/g, " "), 120);
-  if (ev.kind === "system") return truncate(ev.text || "", 120);
+  if (ev.kind === "text") {
+    const normalized = (ev.text || "").replace(/\s+/g, " ");
+    return fullscreen ? normalized : truncate(normalized, 120);
+  }
+  if (ev.kind === "system") {
+    const text = ev.text || "";
+    return fullscreen ? text : truncate(text, 120);
+  }
   if (ev.kind === "thinking") {
     return de.thinkingCount && de.thinkingCount > 1
       ? `thinking… ×${de.thinkingCount}`
@@ -179,8 +189,8 @@ export const LogPane: React.FC<LogPaneProps> = ({ fullscreen, topIdx = null, fil
       </Box>
       {!agent && <Text dimColor>no agent focused</Text>}
       {slice.map((de, i) => (
-        <Text key={i} color={colorFor(de.ev.kind, de.ev)}>
-          {iconFor(de.ev.kind)} {fmtEvent(de)}
+        <Text key={i} color={colorFor(de.ev.kind, de.ev)} wrap={fullscreen ? "wrap" : "truncate-end"}>
+          {iconFor(de.ev.kind)} {fmtEvent(de, fullscreen)}
         </Text>
       ))}
     </Box>

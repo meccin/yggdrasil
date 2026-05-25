@@ -22,7 +22,7 @@ import {
 } from "./profile";
 import { hasBin, glabAuthOk, ghAuthOk } from "./doctor";
 
-const VERSION = "1.2.0";
+const VERSION = "1.3.0";
 
 const printHelp = (): void => {
   console.log(`Yggdrasil ${VERSION} — TUI multi-agent dashboard
